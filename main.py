@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 
 # ==============================================================================
-# 🎬 ULTIMATE MOVIE BOT - FINAL EXPANDED VERSION (FIXED MANUAL POST)
+# 🎬 ULTIMATE MOVIE BOT - UPDATED FIXED VERSION (TUTORIAL LINK + MANUAL FIX)
 # ==============================================================================
 # Features Included:
 # 1. TMDB & IMDb Link Search Logic
-# 2. Manual Post Creation Flow (Fixed Image Issue)
+# 2. Manual Post Creation Flow (Fixed Image & Logic)
 # 3. Face Detection & Watermarking
 # 4. Log Channel Backup System
 # 5. URL Shortener Integration
 # 6. Auto Delete Timer
 # 7. Custom Button / Episode Support
-# 8. Tutorial Video Support
+# 8. Tutorial Link Support (YouTube/Telegram Link via Command)
 # 9. Manual Channel Selection for Posting
 # ==============================================================================
 
@@ -275,7 +275,7 @@ def check_premium(func):
     return wrapper
 
 # ==============================================================================
-# 4. IMAGE PROCESSING & CAPTION GENERATION (UPDATED)
+# 4. IMAGE PROCESSING & CAPTION GENERATION
 # ==============================================================================
 
 def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
@@ -295,7 +295,10 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
                 img_data = requests.get(poster_input, timeout=15).content
                 original_img = Image.open(io.BytesIO(img_data)).convert("RGBA")
             else: # It's a Local File Path
-                original_img = Image.open(poster_input).convert("RGBA")
+                if os.path.exists(poster_input):
+                    original_img = Image.open(poster_input).convert("RGBA")
+                else:
+                    return None, "Local file not found"
         else: # It's BytesIO or File Object
             original_img = Image.open(poster_input).convert("RGBA")
         
@@ -496,7 +499,7 @@ async def start_cmd(client, message: Message):
     await add_user_to_db(user)
     
     # ------------------------------------------------------------------
-    # 🚀 FILE RETRIEVAL SYSTEM (Clean Caption Updated)
+    # 🚀 FILE RETRIEVAL SYSTEM
     # ------------------------------------------------------------------
     if len(message.command) > 1:
         code = message.command[1]
@@ -509,7 +512,6 @@ async def start_cmd(client, message: Message):
             
             # 2. Get Info
             log_msg_id = file_data.get("log_msg_id")
-            # Only use specific clean caption (No extra text)
             caption = file_data.get("caption", "🎬 **Movie File**")
             timer = file_data.get("delete_timer", 0)
 
@@ -599,7 +601,7 @@ async def callback_handler(client, cb: CallbackQuery):
             "**⚙️ Bot Setup Commands:**\n\n"
             "1. `/setapi <your_api_key>` - Set Shortener.\n"
             "2. `/setwatermark <text>` - Set watermark.\n"
-            "3. `/settutorial` - Reply to video to set Tutorial.\n"
+            "3. `/settutorial <link>` - Set Tutorial Link (YouTube/Telegram).\n"
             "4. `/addchannel <id>` - Add channel."
         )
         await cb.answer(help_text, show_alert=True)
@@ -653,18 +655,17 @@ async def settings_commands(client, message: Message):
         else:
             await message.reply_text("❌ Usage: `/setdomain shrinkme.io`")
             
-    # 🆕 NEW TUTORIAL SETTING COMMAND
+    # 🆕 UPDATED TUTORIAL SETTING COMMAND (LINK BASED)
     elif cmd == "settutorial":
-        if uid != OWNER_ID:
-            return await message.reply_text("❌ Only Owner can set tutorial.")
-        
-        if not message.reply_to_message or not message.reply_to_message.video:
-            return await message.reply_text("❌ **Usage:** Reply to a **Video** with `/settutorial`")
-            
-        video_file_id = message.reply_to_message.video.file_id
-        # Save to Owner's DB Entry
-        await users_collection.update_one({'_id': OWNER_ID}, {'$set': {'tutorial_video': video_file_id}}, upsert=True)
-        await message.reply_text("✅ **Tutorial Video Saved!**\nIt will appear in every post.")
+        if len(message.command) > 1:
+            link = message.command[1]
+            if link.startswith("http"):
+                await users_collection.update_one({'_id': uid}, {'$set': {'tutorial_url': link}}, upsert=True)
+                await message.reply_text(f"✅ **Tutorial Link Saved!**\nLink: {link}")
+            else:
+                await message.reply_text("❌ Invalid Link! Must start with `http` or `https`.")
+        else:
+            await message.reply_text("❌ **Usage:** `/settutorial https://t.me/your_post_link`\nor `/settutorial https://youtube.com/watch?v=...`")
 
     elif cmd == "settimer":
         if len(message.command) > 1:
@@ -717,7 +718,7 @@ async def post_search_cmd(client, message: Message):
     
     results = []
     
-    # 🆕 CHECK: Is it an IMDb ID/Link?
+    # Check: Is it an IMDb ID/Link?
     imdb_match = re.search(r'tt\d+', query)
     
     if imdb_match:
@@ -738,7 +739,7 @@ async def post_search_cmd(client, message: Message):
     buttons.append([InlineKeyboardButton("📝 Create Manually (No TMDB)", callback_data="manual_start")])
     
     if not results:
-        await msg.edit_text("❌ **No results found!**\nMake sure the IMDb ID is correct or try searching by Name.")
+        await msg.edit_text("❌ **No TMDB results found!**\nTry searching manually or check spelling.", reply_markup=InlineKeyboardMarkup(buttons))
     else:
         await msg.edit_text(f"👇 **Found {len(results)} Result(s):**", reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -806,7 +807,7 @@ async def show_upload_panel(message, uid):
         [InlineKeyboardButton("📤 Upload 480p", callback_data="up_480p")],
         [InlineKeyboardButton("📤 Upload 720p", callback_data="up_720p")],
         [InlineKeyboardButton("📤 Upload 1080p", callback_data="up_1080p")],
-        # 🆕 Custom Episode Button
+        # Custom Episode Button
         [InlineKeyboardButton("➕ Add Episode / Custom Button", callback_data="add_custom_btn")],
         [InlineKeyboardButton("🇧🇩 Badge: Bangla", callback_data="bdg_bangla"),
          InlineKeyboardButton("⏭ Skip Badge", callback_data="bdg_skip")],
@@ -828,7 +829,7 @@ async def show_upload_panel(message, uid):
     else:
         await message.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
-# 🆕 New Handler for Custom Buttons
+# Custom Button Name Handler
 @bot.on_callback_query(filters.regex("^add_custom_btn"))
 async def add_custom_btn_handler(client, cb: CallbackQuery):
     uid = cb.from_user.id
@@ -975,20 +976,23 @@ async def main_conversation_handler(client, message: Message):
         msg = await message.reply_text("⬇️ Downloading poster...")
         photo_name = f"poster_{uid}_{int(time.time())}.jpg"
         try:
+            # Download file
             photo_path = await client.download_media(message, file_name=photo_name)
-            convo["details"]["poster_local_path"] = photo_path # Save LOCAL PATH
+            # Store ABSOLUTE path
+            convo["details"]["poster_local_path"] = os.path.abspath(photo_path) 
             await msg.delete()
             
             convo["state"] = "wait_lang"
             await message.reply_text("✅ Poster Saved.\n\n🌐 **Send Language:** (e.g. Hindi, English)")
         except Exception as e:
+            logger.error(f"Poster Download Error: {e}")
             await msg.edit_text(f"❌ Error downloading poster: {e}")
 
     elif state == "wait_lang" and convo.get("is_manual"):
         convo["language"] = text
         await show_upload_panel(message, uid)
 
-    # 🆕 CUSTOM BUTTON NAME HANDLER
+    # CUSTOM BUTTON NAME HANDLER
     elif state == "wait_custom_btn_name":
         convo["temp_btn_name"] = text
         convo["current_quality"] = "custom"
@@ -1053,7 +1057,7 @@ async def main_conversation_handler(client, message: Message):
                 "code": code,
                 "file_id": backup_file_id,  # File ID from Log Channel
                 "log_msg_id": backup_msg_id, # Msg ID from Log Channel
-                "caption": tmdb_caption, # ✅ Only clean caption stored
+                "caption": tmdb_caption, # Only clean caption stored
                 "delete_timer": timer,
                 "uploader_id": uid,
                 "created_at": datetime.now()
@@ -1066,7 +1070,7 @@ async def main_conversation_handler(client, message: Message):
             # H. Update Conversation (Use specific button name)
             convo['links'][btn_name] = short_link
             
-            # ✅ ERROR FIX: Using status_msg instead of message for editing
+            # DONE
             await show_upload_panel(status_msg, uid)
             
         except Exception as e:
@@ -1103,32 +1107,28 @@ async def process_final_post(client, cb: CallbackQuery):
     # 2. Create Buttons (Handle Custom Names properly)
     buttons = []
     for qual, link in convo['links'].items():
-        # If it's a standard quality like "480p", add "Download" prefix.
         if qual in ["480p", "720p", "1080p"]:
             btn_text = f"📥 Download {qual}"
         else:
-            # For custom names like "Episode 1", keep it simple or add icon
             btn_text = f"📥 {qual}" 
-            
         buttons.append([InlineKeyboardButton(btn_text, url=link)])
         
-    # 🆕 NEW: Add "How to Download" Button at the bottom
-    buttons.append([InlineKeyboardButton("ℹ️ How to Download / কিভাবে ডাউনলোড করবেন", callback_data="show_tutorial")])
-    
-    # 3. Process Image (Watermark + Badge) [UPDATED LOGIC]
-    details = convo['details']
+    # 🆕 NEW: Add "How to Download" Button from User Settings
     user_data = await users_collection.find_one({'_id': uid})
+    tutorial_link = user_data.get('tutorial_url')
+    
+    if tutorial_link:
+        buttons.append([InlineKeyboardButton("ℹ️ How to Download / কিভাবে ডাউনলোড করবেন", url=tutorial_link)])
+    
+    # 3. Process Image (Watermark + Badge) [UPDATED MANUAL LOGIC]
+    details = convo['details']
     
     poster_input = None
     
-    # Priority 1: Manual Local File Check
-    if details.get('poster_local_path'):
+    # Priority 1: Manual Local File Check (Fixes Manual Post Issue)
+    if details.get('poster_local_path') and os.path.exists(details['poster_local_path']):
         poster_input = details['poster_local_path']
-    # Priority 2: Memory Bytes (Legacy)
-    elif details.get('poster_bytes'):
-         poster_input = details['poster_bytes']
-         poster_input.seek(0)
-    # Priority 3: TMDB Poster Path
+    # Priority 2: TMDB Poster Path
     elif details.get('poster_path'):
         poster_input = f"https://image.tmdb.org/t/p/w500{details['poster_path']}"
         
@@ -1139,7 +1139,12 @@ async def process_final_post(client, cb: CallbackQuery):
     )
     
     if not poster_buffer:
-        return await cb.message.edit_text(f"❌ **Image Processing Error:** {error}")
+        # Fallback if no poster found/error
+        if error:
+            logger.error(f"Poster Error: {error}")
+            return await cb.message.edit_text(f"❌ **Image Processing Error:** {error}\n(Did you upload a poster in manual mode?)")
+        else:
+             return await cb.message.edit_text("❌ Poster not found.")
     
     # 4. Send Preview to User FIRST
     poster_buffer.seek(0)
@@ -1168,7 +1173,6 @@ async def process_final_post(client, cb: CallbackQuery):
     
     if channels:
         for cid in channels:
-            # We use ID directly here. 
             channel_btns.append([InlineKeyboardButton(f"📢 Post to: {cid}", callback_data=f"sndch_{cid}")])
     else:
         await client.send_message(uid, "⚠️ **No Channels Saved!** Add using `/addchannel <id>`.")
@@ -1180,26 +1184,6 @@ async def process_final_post(client, cb: CallbackQuery):
         "👇 **Select Channel to Publish:**\n(Clicking a button will instantly post to that channel)",
         reply_markup=InlineKeyboardMarkup(channel_btns)
     )
-
-# 🆕 NEW CALLBACK: Handle "How to Download" Click
-@bot.on_callback_query(filters.regex("^show_tutorial"))
-async def show_tutorial_handler(client, cb: CallbackQuery):
-    # Retrieve Tutorial Video ID from OWNER's data
-    owner_data = await users_collection.find_one({'_id': OWNER_ID})
-    video_id = owner_data.get('tutorial_video')
-    
-    if video_id:
-        try:
-            await client.send_video(
-                chat_id=cb.from_user.id,
-                video=video_id,
-                caption="🎥 **How to Download / কিভাবে ডাউনলোড করবেন:**"
-            )
-            await cb.answer("✅ Video Sent to Inbox!", show_alert=True)
-        except Exception as e:
-            await cb.answer("❌ Start the Bot in PM first!", show_alert=True)
-    else:
-        await cb.answer("⚠️ No Tutorial Video Set by Admin.", show_alert=True)
 
 # Post to Channel Handler
 @bot.on_callback_query(filters.regex("^sndch_"))
