@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
 
 # ==============================================================================
-# 🎬 ULTIMATE MOVIE BOT - FINAL FULL VERSION (MANUAL + FILE STORE MERGED)
+# 🎬 ULTIMATE MOVIE BOT - ABSOLUTE FULL VERSION (FINAL)
 # ==============================================================================
 # Features Included:
 # 1. TMDB Auto Search (/post)
-# 2. Advanced Manual Post (/manual) - With Metadata Inputs
+# 2. Manual Post (/manual) - No Language Restriction, Fixed Upload Panel
 # 3. File Store System (Upload File -> Get Short Link)
 # 4. Face Detection & Watermarking
 # 5. Log Channel Backup
 # 6. Auto Delete Timer
 # 7. URL Shortener Integration
 # 8. Channel Management
+# 9. Admin Controls & Broadcast
 # ==============================================================================
 
 # ---- Core Python Imports ----
@@ -112,7 +113,7 @@ Thread(target=run_flask, daemon=True).start()
 # ==============================================================================
 
 async def get_bot_username():
-    """Fetch and cache the bot username to avoid repeated API calls."""
+    """Fetch and cache the bot username."""
     global BOT_USERNAME
     if not BOT_USERNAME:
         me = await bot.get_me()
@@ -120,50 +121,44 @@ async def get_bot_username():
     return BOT_USERNAME
 
 def generate_random_code(length=8):
-    """Generate a random alphanumeric code for deep links."""
+    """Generate a random alphanumeric code."""
     chars = string.ascii_letters + string.digits
     return ''.join(secrets.choice(chars) for _ in range(length))
 
 async def auto_delete_message(client, chat_id, message_id, delay_seconds):
-    """Background task to delete a message after a specific delay."""
+    """Background task to delete a message after a delay."""
     if delay_seconds > 0:
         await asyncio.sleep(delay_seconds)
         try:
             await client.delete_messages(chat_id, message_id)
-        except Exception as e:
-            logger.warning(f"Failed to auto-delete message: {e}")
+        except Exception:
+            pass
 
-# --- Resource Downloaders (Fonts & Face Cascades) ---
+# --- Resource Downloaders ---
 
 def download_cascade():
-    """Download OpenCV Face Cascade file if not exists."""
+    """Download OpenCV Face Cascade file."""
     cascade_file = "haarcascade_frontalface_default.xml"
     if not os.path.exists(cascade_file):
-        logger.info("Downloading Face Cascade XML...")
         url = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml"
         try:
             r = requests.get(url, timeout=20)
-            r.raise_for_status()
             with open(cascade_file, 'wb') as f:
                 f.write(r.content)
-        except Exception as e:
-            logger.error(f"Failed to download cascade: {e}")
+        except Exception:
             return None
     return cascade_file
 
 def download_font():
-    """Download Custom Font if not exists."""
+    """Download Custom Font."""
     font_file = "HindSiliguri-Bold.ttf"
     if not os.path.exists(font_file):
-        logger.info("Downloading Font...")
         url = "https://github.com/google/fonts/raw/main/ofl/hindsiliguri/HindSiliguri-Bold.ttf"
         try:
             r = requests.get(url, timeout=20)
-            r.raise_for_status()
             with open(font_file, 'wb') as f:
                 f.write(r.content)
-        except Exception as e:
-            logger.error(f"Failed to download font: {e}")
+        except Exception:
             return None
     return font_file
 
@@ -193,9 +188,8 @@ async def shorten_link(user_id: int, long_url: str):
     """Shorten a URL using the user's API settings."""
     user_data = await users_collection.find_one({'_id': user_id})
     
-    # Check if user has setup shortener
     if not user_data or 'shortener_api' not in user_data or 'shortener_url' not in user_data:
-        return long_url # Return original if API not set
+        return long_url
 
     api_key = user_data['shortener_api']
     base_url = user_data['shortener_url']
@@ -208,16 +202,14 @@ async def shorten_link(user_id: int, long_url: str):
             return data["shortenedUrl"]
         else:
             return long_url
-    except Exception as e:
-        logger.error(f"Shortener Error: {e}")
+    except Exception:
         return long_url
 
 # ==============================================================================
-# 3. DECORATORS (Access Control)
+# 3. DECORATORS
 # ==============================================================================
 
 def force_subscribe(func):
-    """Decorator to enforce channel subscription."""
     async def wrapper(client, message):
         if FORCE_SUB_CHANNEL:
             try:
@@ -225,30 +217,16 @@ def force_subscribe(func):
                 await client.get_chat_member(chat_id, message.from_user.id)
             except UserNotParticipant:
                 join_link = INVITE_LINK or f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"
-                
-                if len(message.command) > 1:
-                    start_arg = message.command[1]
-                    bot_uname = await get_bot_username()
-                    return await message.reply_text(
-                        "🔒 **Protected Content!**\n\nYou must join our channel to access this file.", 
-                        reply_markup=InlineKeyboardMarkup([
-                            [InlineKeyboardButton("👉 Join Channel", url=join_link)],
-                            [InlineKeyboardButton("🔄 Try Again", url=f"https://t.me/{bot_uname}?start={start_arg}")]
-                        ])
-                    )
-                else:
-                    return await message.reply_text(
-                        "❗ **You must join our channel to use this bot.**", 
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👉 Join Channel", url=join_link)]])
-                    )
-            except Exception as e:
-                logger.error(f"Force Sub Error: {e}")
+                return await message.reply_text(
+                    "❗ **You must join our channel to use this bot.**", 
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👉 Join Channel", url=join_link)]])
+                )
+            except Exception:
                 pass 
         await func(client, message)
     return wrapper
 
 def check_premium(func):
-    """Decorator to restrict features to Premium users."""
     async def wrapper(client, message):
         if await is_user_premium(message.from_user.id):
             await func(client, message)
@@ -267,27 +245,24 @@ def check_premium(func):
 
 def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
     """
-    Advanced poster editor:
-    - Adds text watermark (bottom).
-    - Adds custom badge (top) with face detection.
-    - Handles URL, Local File Path, or BytesIO.
+    Adds watermark and badge to the poster.
     """
     if not poster_input:
         return None, "Poster not found."
     
     try:
         original_img = None
-        # Load Image from URL, File Path, or Bytes
+        # Load Image
         if isinstance(poster_input, str):
-            if poster_input.startswith("http"): # It's a URL
+            if poster_input.startswith("http"): # URL
                 img_data = requests.get(poster_input, timeout=15).content
                 original_img = Image.open(io.BytesIO(img_data)).convert("RGBA")
-            else: # It's a Local File Path
+            else: # Local File
                 if os.path.exists(poster_input):
                     original_img = Image.open(poster_input).convert("RGBA")
                 else:
                     return None, f"Local file not found: {poster_input}"
-        else: # It's BytesIO or File Object
+        else: # BytesIO
             original_img = Image.open(poster_input).convert("RGBA")
             
         if not original_img:
@@ -297,7 +272,7 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
         img.paste(original_img)
         draw = ImageDraw.Draw(img)
 
-        # ---- Badge Logic (with Gradient & Face Detect) ----
+        # ---- Badge Logic ----
         if badge_text:
             badge_font_size = int(img.width / 9)
             font_path = download_font()
@@ -306,13 +281,13 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
             except:
                 badge_font = ImageFont.load_default()
 
-            # Calculate Text Size
+            # Text Size
             bbox = draw.textbbox((0, 0), badge_text, font=badge_font)
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
             x = (img.width - text_width) / 2
             
-            # Smart Positioning (Face Detect)
+            # Face Detection
             y_pos = img.height * 0.03
             cascade_path = download_cascade()
             
@@ -323,25 +298,24 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
                     face_cascade = cv2.CascadeClassifier(cascade_path)
                     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
                     
-                    # Check collision
+                    is_collision = False
                     padding = int(badge_font_size * 0.2)
                     text_box_y1 = y_pos + text_height + padding
                     
-                    is_collision = False
                     for (fx, fy, fw, fh) in faces:
                         if y_pos < (fy + fh) and text_box_y1 > fy:
                             is_collision = True
                             break
                     
                     if is_collision:
-                        y_pos = img.height * 0.25  # Move down if face detected at top
-                except Exception as e:
-                    logger.error(f"Face detection failed: {e}")
+                        y_pos = img.height * 0.25
+                except Exception:
+                    pass
 
             y = y_pos
             padding = int(badge_font_size * 0.15)
             
-            # Draw Semi-transparent Background for Badge
+            # Background
             rect_layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
             rect_draw = ImageDraw.Draw(rect_layer)
             rect_draw.rectangle(
@@ -351,12 +325,12 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
             img = Image.alpha_composite(img, rect_layer)
             draw = ImageDraw.Draw(img)
 
-            # Draw Gradient Text
+            # Gradient Text
             gradient = Image.new('RGBA', (text_width, text_height + int(padding)), (0, 0, 0, 0))
             gradient_draw = ImageDraw.Draw(gradient)
             
-            start_color = (255, 255, 0) # Yellow
-            end_color = (255, 69, 0)   # OrangeRed
+            start_color = (255, 255, 0)
+            end_color = (255, 69, 0)
             
             for i in range(text_width):
                 ratio = i / text_width
@@ -387,9 +361,7 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
             wx = (img.width - text_width) / 2
             wy = img.height - bbox[3] - (img.height * 0.05)
             
-            # Shadow
             draw.text((wx + 2, wy + 2), watermark_text, font=font, fill=(0, 0, 0, 128))
-            # Text
             draw.text((wx, wy), watermark_text, font=font, fill=(255, 255, 255, 200))
             
         buffer = io.BytesIO()
@@ -405,7 +377,6 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
 # --- TMDB & IMDb Functions ---
 
 def search_tmdb(query: str):
-    """Search TMDB for movies/tv shows by text."""
     url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={query}&include_adult=true"
     try:
         r = requests.get(url, timeout=10)
@@ -413,19 +384,16 @@ def search_tmdb(query: str):
         data = r.json()
         results = data.get("results", [])
         return [res for res in results if res.get("media_type") in ["movie", "tv"]][:5]
-    except Exception as e:
-        logger.error(f"TMDB Search Error: {e}")
+    except Exception:
         return []
 
 def search_by_imdb(imdb_id: str):
-    """Find media on TMDB using IMDb ID (ttxxxxxxx)."""
     url = f"https://api.themoviedb.org/3/find/{imdb_id}?api_key={TMDB_API_KEY}&external_source=imdb_id"
     try:
         r = requests.get(url, timeout=10)
         r.raise_for_status()
         data = r.json()
         results = []
-        # Combine results from movie and tv
         for item in data.get("movie_results", []):
             item['media_type'] = 'movie'
             results.append(item)
@@ -433,28 +401,22 @@ def search_by_imdb(imdb_id: str):
             item['media_type'] = 'tv'
             results.append(item)
         return results
-    except Exception as e:
-        logger.error(f"IMDb Find Error: {e}")
+    except Exception:
         return []
 
 def get_tmdb_details(media_type, media_id):
-    """Get full details for a specific media."""
     url = f"https://api.themoviedb.org/3/{media_type}/{media_id}?api_key={TMDB_API_KEY}"
     try:
         r = requests.get(url, timeout=10)
         r.raise_for_status()
         return r.json()
-    except Exception as e:
-        logger.error(f"TMDB Details Error: {e}")
+    except Exception:
         return None
 
 # ==============================================================================
 # CAPTION GENERATOR
 # ==============================================================================
 async def generate_channel_caption(data: dict, language: str, short_links: dict, is_manual: bool = False):
-    """
-    Generates the text caption.
-    """
     title = data.get("title") or data.get("name") or "Movie"
     date = data.get("release_date") or data.get("first_air_date") or "----"
     year = date[:4]
@@ -465,7 +427,7 @@ async def generate_channel_caption(data: dict, language: str, short_links: dict,
         if isinstance(data["genres"][0], dict):
             genre_str = ", ".join([g["name"] for g in data.get("genres", [])[:3]])
         else:
-            genre_str = str(data.get("genres")) # For manual input
+            genre_str = str(data.get("genres")) # For manual input string
     else:
         genre_str = "N/A"
 
@@ -500,38 +462,28 @@ async def start_cmd(client, message: Message):
     uid = user.id
     await add_user_to_db(user)
     
-    # ------------------------------------------------------------------
-    # 🚀 FILE RETRIEVAL SYSTEM (Core Feature)
-    # ------------------------------------------------------------------
+    # --- FILE RETRIEVAL SYSTEM ---
     if len(message.command) > 1:
         code = message.command[1]
-        
-        # 1. Check Database for File Info
         file_data = await files_collection.find_one({"code": code})
         
         if file_data:
-            msg = await message.reply_text("📂 **Fetching your file...**\nPlease wait...")
-            
-            # 2. Get Info
+            msg = await message.reply_text("📂 **Fetching your file...**")
             log_msg_id = file_data.get("log_msg_id")
             caption = file_data.get("caption", "🎬 **Movie File**")
             timer = file_data.get("delete_timer", 0)
 
             try:
                 sent_msg = None
-                
-                # METHOD A: Send by File ID
                 try:
                     sent_msg = await client.send_cached_media(
                         chat_id=uid,
                         file_id=file_data["file_id"],
                         caption=caption
                     )
-                except Exception as e:
-                    logger.warning(f"Failed to send cached media: {e}. Trying fallback.")
+                except:
                     sent_msg = None
 
-                # METHOD B: Copy from Log Channel
                 if not sent_msg and LOG_CHANNEL_ID and log_msg_id:
                     sent_msg = await client.copy_message(
                         chat_id=uid,
@@ -542,30 +494,25 @@ async def start_cmd(client, message: Message):
                 
                 if sent_msg:
                     await msg.delete()
-                    # 3. Handle Auto Delete
                     if timer > 0:
                         asyncio.create_task(auto_delete_message(client, uid, sent_msg.id, timer))
-                        await client.send_message(uid, f"⚠️ **Auto-Delete Enabled!**\n\nThis file will be deleted in **{int(timer/60)} minutes**.\nForward it to Saved Messages now!")
+                        await client.send_message(uid, f"⚠️ **Auto-Delete Enabled!**\n\nThis file will be deleted in **{int(timer/60)} minutes**.")
                 else:
-                    await msg.edit_text("❌ **Error:** Could not retrieve file. It might have been deleted from the Log Channel.")
+                    await msg.edit_text("❌ **Error:** File not found.")
 
             except Exception as e:
-                logger.error(f"File Send Error: {e}")
                 await msg.edit_text(f"❌ **Error:** {e}")
         else:
             await message.reply_text("❌ **Link Expired or Invalid.**")
         return
 
-    # ------------------------------------------------------------------
-    # NORMAL START MENU
-    # ------------------------------------------------------------------
+    # --- MAIN MENU ---
     if uid in user_conversations:
         del user_conversations[uid]
         
     is_premium = await is_user_premium(uid)
     
     if uid == OWNER_ID:
-        # Admin Menu
         welcome_text = f"👑 **Welcome Boss!**\n\n**Admin Control Panel:**"
         buttons = InlineKeyboardMarkup([
             [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"),
@@ -575,7 +522,6 @@ async def start_cmd(client, message: Message):
              [InlineKeyboardButton("⚙️ Setup Instructions", callback_data="api_help")]
         ])
     else:
-        # User Menu
         status_text = "💎 **Premium User**" if is_premium else "👤 **Free User**"
         welcome_text = f"👋 **Hello {user.first_name}!**\n\nYour Status: {status_text}\n\n👇 **Available Commands:**\n`/post` - Auto TMDB Post (Premium)\n`/manual` - Manual Post (Free for All)"
         
@@ -587,7 +533,7 @@ async def start_cmd(client, message: Message):
 
     await message.reply_text(welcome_text, reply_markup=buttons)
 
-# --- Callback Query Handler (Admin & Menu) ---
+# --- Callback Handler ---
 
 @bot.on_callback_query(filters.regex(r"^(admin_|my_account|api_help)"))
 async def callback_handler(client, cb: CallbackQuery):
@@ -599,13 +545,7 @@ async def callback_handler(client, cb: CallbackQuery):
         await cb.answer(f"User: {cb.from_user.first_name}\nStatus: {status}", show_alert=True)
         
     elif data == "api_help":
-        help_text = (
-            "**⚙️ Bot Setup Commands:**\n\n"
-            "1. `/setapi <your_api_key>` - Set Shortener.\n"
-            "2. `/setwatermark <text>` - Set watermark.\n"
-            "3. `/settutorial <link>` - Set Tutorial Link (YouTube/Telegram).\n"
-            "4. `/addchannel <id>` - Add channel."
-        )
+        help_text = "**⚙️ Commands:**\n`/setapi <key>`\n`/setwatermark <text>`\n`/settutorial <link>`\n`/addchannel <id>`"
         await cb.answer(help_text, show_alert=True)
         
     elif data.startswith("admin_") and uid == OWNER_ID:
@@ -615,20 +555,20 @@ async def callback_handler(client, cb: CallbackQuery):
             await cb.answer(f"📊 Total Users: {total}\n💎 Premium: {prem}", show_alert=True)
             
         elif data == "admin_broadcast":
-            await cb.message.edit_text("📢 **Broadcast Mode**\n\nSend the message you want to broadcast to all users.")
+            await cb.message.edit_text("📢 **Broadcast Mode**\n\nSend message to broadcast.")
             user_conversations[uid] = {"state": "admin_broadcast_wait"}
             
         elif "add_premium" in data:
-            await cb.message.edit_text("➕ **Add Premium**\n\nSend the User ID.")
+            await cb.message.edit_text("➕ **Add Premium**\n\nSend User ID.")
             user_conversations[uid] = {"state": "admin_add_prem_wait"}
             
         elif "rem_premium" in data:
-            await cb.message.edit_text("➖ **Remove Premium**\n\nSend the User ID.")
+            await cb.message.edit_text("➖ **Remove Premium**\n\nSend User ID.")
             user_conversations[uid] = {"state": "admin_rem_prem_wait"}
 
 # --- Settings Commands ---
 
-@bot.on_message(filters.command(["setwatermark", "setapi", "setdomain", "settimer", "addchannel", "delchannel", "mychannels", "settutorial"]) & filters.private)
+@bot.on_message(filters.command(["setwatermark", "setapi", "settimer", "addchannel", "delchannel", "mychannels", "settutorial"]) & filters.private)
 @force_subscribe
 async def settings_commands(client, message: Message):
     cmd = message.command[0].lower()
@@ -636,46 +576,29 @@ async def settings_commands(client, message: Message):
     
     if cmd == "setwatermark":
         text = " ".join(message.command[1:])
-        if text:
-            await users_collection.update_one({'_id': uid}, {'$set': {'watermark_text': text}}, upsert=True)
-            await message.reply_text(f"✅ Watermark set to: `{text}`")
-        else:
-            await message.reply_text("❌ Usage: `/setwatermark Your Text`")
+        await users_collection.update_one({'_id': uid}, {'$set': {'watermark_text': text}}, upsert=True)
+        await message.reply_text(f"✅ Watermark set: `{text}`")
 
     elif cmd == "setapi":
         if len(message.command) > 1:
             await users_collection.update_one({'_id': uid}, {'$set': {'shortener_api': message.command[1]}}, upsert=True)
             await message.reply_text("✅ API Key Saved.")
-        else:
-            await message.reply_text("❌ Usage: `/setapi YOUR_KEY`")
+        else: await message.reply_text("❌ Usage: `/setapi KEY`")
 
-    elif cmd == "setdomain":
-        if len(message.command) > 1:
-            await users_collection.update_one({'_id': uid}, {'$set': {'shortener_url': message.command[1]}}, upsert=True)
-            await message.reply_text("✅ Domain Saved.")
-        else:
-            await message.reply_text("❌ Usage: `/setdomain shrinkme.io`")
-            
     elif cmd == "settutorial":
         if len(message.command) > 1:
             link = message.command[1]
-            if link.startswith("http"):
-                await users_collection.update_one({'_id': uid}, {'$set': {'tutorial_url': link}}, upsert=True)
-                await message.reply_text(f"✅ **Tutorial Link Saved!**\nLink: {link}")
-            else:
-                await message.reply_text("❌ Invalid Link! Must start with `http` or `https`.")
-        else:
-            await message.reply_text("❌ **Usage:** `/settutorial https://t.me/your_post_link`")
+            await users_collection.update_one({'_id': uid}, {'$set': {'tutorial_url': link}}, upsert=True)
+            await message.reply_text(f"✅ Tutorial Link Saved.")
+        else: await message.reply_text("❌ Usage: `/settutorial link`")
 
     elif cmd == "settimer":
         if len(message.command) > 1:
             try:
                 mins = int(message.command[1])
-                secs = mins * 60
-                await users_collection.update_one({'_id': uid}, {'$set': {'delete_timer': secs}}, upsert=True)
-                await message.reply_text(f"✅ Auto-Delete Timer set to: **{mins} Minutes**")
-            except:
-                await message.reply_text("❌ Usage: `/settimer 10` (for 10 minutes)")
+                await users_collection.update_one({'_id': uid}, {'$set': {'delete_timer': mins*60}}, upsert=True)
+                await message.reply_text(f"✅ Timer set: **{mins} Minutes**")
+            except: await message.reply_text("❌ Usage: `/settimer 10`")
         else:
             await users_collection.update_one({'_id': uid}, {'$set': {'delete_timer': 0}})
             await message.reply_text("✅ Auto-Delete DISABLED.")
@@ -685,8 +608,6 @@ async def settings_commands(client, message: Message):
             cid = message.command[1]
             await users_collection.update_one({'_id': uid}, {'$addToSet': {'channel_ids': cid}}, upsert=True)
             await message.reply_text(f"✅ Channel `{cid}` added.")
-        else:
-            await message.reply_text("❌ Usage: `/addchannel -100xxxxx`")
 
     elif cmd == "delchannel":
         if len(message.command) > 1:
@@ -697,13 +618,11 @@ async def settings_commands(client, message: Message):
     elif cmd == "mychannels":
         data = await users_collection.find_one({'_id': uid})
         channels = data.get('channel_ids', [])
-        if channels:
-            await message.reply_text(f"📋 **Saved Channels:**\n" + "\n".join([f"`{c}`" for c in channels]))
-        else:
-            await message.reply_text("❌ No channels saved.")
+        if channels: await message.reply_text(f"📋 **Channels:**\n" + "\n".join([f"`{c}`" for c in channels]))
+        else: await message.reply_text("❌ No channels saved.")
 
 # ==============================================================================
-# 6. AUTO POST CREATION FLOW (TMDB + IMDb)
+# 6. AUTO POST CREATION (TMDB)
 # ==============================================================================
 
 @bot.on_message(filters.command("post") & filters.private)
@@ -711,23 +630,12 @@ async def settings_commands(client, message: Message):
 @check_premium
 async def post_search_cmd(client, message: Message):
     if len(message.command) == 1:
-        return await message.reply_text("**Usage:**\n1. `/post Movie Name`\n2. `/post IMDb-Link/ID` (e.g. tt1234567)")
+        return await message.reply_text("**Usage:** `/post Movie Name`")
     
     query = " ".join(message.command[1:]).strip()
     msg = await message.reply_text(f"🔍 **Searching...**\n`{query}`")
     
-    results = []
-    
-    # Check: Is it an IMDb ID/Link?
-    imdb_match = re.search(r'tt\d+', query)
-    
-    if imdb_match:
-        # Search via IMDb ID
-        imdb_id = imdb_match.group(0)
-        results = search_by_imdb(imdb_id)
-    else:
-        # Search via Name
-        results = search_tmdb(query)
+    results = search_tmdb(query)
     
     buttons = []
     for r in results:
@@ -737,21 +645,18 @@ async def post_search_cmd(client, message: Message):
         buttons.append([InlineKeyboardButton(f"🎬 {title} ({year})", callback_data=f"sel_{m_type}_{r['id']}")])
     
     if not results:
-        await msg.edit_text("❌ **No TMDB results found!**\nTry searching manually or check spelling.")
+        await msg.edit_text("❌ **No TMDB results found!**")
     else:
         await msg.edit_text(f"👇 **Found {len(results)} Result(s):**", reply_markup=InlineKeyboardMarkup(buttons))
 
-
 # ==============================================================================
-# 7. NEW MANUAL POST SYSTEM (MERGED FEATURES)
+# 7. MANUAL POST SYSTEM (MERGED & FIXED)
 # ==============================================================================
 
 @bot.on_message(filters.command("manual") & filters.private)
 @force_subscribe
 async def manual_cmd_start(client, message: Message):
-    """
-    Dedicated Manual Post Entry Point.
-    """
+    """Dedicated Manual Post Entry Point."""
     await message.reply_text(
         "📝 **Manual Post Creation**\n\nWhat are you uploading?",
         reply_markup=InlineKeyboardMarkup([
@@ -765,7 +670,6 @@ async def manual_type_handler(client, cb: CallbackQuery):
     m_type = cb.data.split("_")[2]
     uid = cb.from_user.id
     
-    # Initialize session for Manual Post
     user_conversations[uid] = {
         "details": {"media_type": m_type},
         "links": {},
@@ -775,16 +679,14 @@ async def manual_type_handler(client, cb: CallbackQuery):
     await cb.message.edit_text(f"📝 **Step 1:** Send the **Title** of the {m_type}.")
 
 # ==============================================================================
-# 8. UPLOAD PANEL & HANDLERS (SHARED LOGIC)
+# 8. UPLOAD PANEL & HANDLERS
 # ==============================================================================
 
 @bot.on_callback_query(filters.regex("^sel_"))
 async def media_selected(client, cb: CallbackQuery):
     _, m_type, mid = cb.data.split("_")
     details = get_tmdb_details(m_type, mid)
-    
-    if not details:
-        return await cb.answer("Error fetching details!", show_alert=True)
+    if not details: return await cb.answer("Error fetching details!", show_alert=True)
     
     uid = cb.from_user.id
     user_conversations[uid] = {
@@ -794,33 +696,29 @@ async def media_selected(client, cb: CallbackQuery):
         "is_manual": False
     }
     
-    langs = [["English", "Hindi"], ["Bengali", "Dual Audio"], ["Tamil", "Telugu"]]
+    langs = [["English", "Hindi"], ["Bengali", "Dual Audio"]]
     buttons = [[InlineKeyboardButton(l, callback_data=f"lang_{l}") for l in row] for row in langs]
-    
-    await cb.message.edit_text(
-        f"✅ Selected: **{details.get('title') or details.get('name')}**\n\n🌐 **Select Language:**",
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
+    await cb.message.edit_text(f"✅ Selected: **{details.get('title') or details.get('name')}**\n\n🌐 **Select Language:**", reply_markup=InlineKeyboardMarkup(buttons))
 
 @bot.on_callback_query(filters.regex("^lang_"))
 async def language_selected(client, cb: CallbackQuery):
     lang = cb.data.split("_")[1]
     uid = cb.from_user.id
     user_conversations[uid]["language"] = lang
-    await show_upload_panel(cb.message, uid)
+    # For Auto post, we can edit the message
+    await show_upload_panel(cb.message, uid, is_edit=True)
 
-async def show_upload_panel(message, uid):
+async def show_upload_panel(message, uid, is_edit=False):
     """
     Shows the panel to upload files.
-    Works for BOTH Auto Post and Manual Post.
+    Safely handles both Message objects (Reply) and Callback objects (Edit).
     """
     buttons = [
         [InlineKeyboardButton("📤 Upload 480p", callback_data="up_480p")],
         [InlineKeyboardButton("📤 Upload 720p", callback_data="up_720p")],
         [InlineKeyboardButton("📤 Upload 1080p", callback_data="up_1080p")],
-        # Custom Episode Button
-        [InlineKeyboardButton("➕ Add Episode / Custom Button", callback_data="add_custom_btn")],
-        [InlineKeyboardButton("🎨 Badge Settings", callback_data="set_badge")],
+        [InlineKeyboardButton("➕ Custom Button / Episode", callback_data="add_custom_btn")],
+        [InlineKeyboardButton("🎨 Add Badge", callback_data="set_badge")],
         [InlineKeyboardButton("✅ FINISH & POST", callback_data="proc_final")]
     ]
     
@@ -835,22 +733,17 @@ async def show_upload_panel(message, uid):
             f"🏷 **Badge:** {badge}\n\n"
             f"👇 **Tap a button to upload a file for that quality:**")
     
-    if isinstance(message, Message):
+    if is_edit:
         await message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
     else:
-        await message.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+        # Crucial for Manual Flow to prevent edit crash
+        await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
 @bot.on_callback_query(filters.regex("^add_custom_btn"))
 async def add_custom_btn_handler(client, cb: CallbackQuery):
     uid = cb.from_user.id
     user_conversations[uid]["state"] = "wait_custom_btn_name"
-    await cb.message.edit_text(
-        "📝 **Enter Custom Button Name:**\n\n"
-        "Examples:\n"
-        "- `Episode 1`\n"
-        "- `Season 1 Zip`\n"
-        "- `480p [Drive]`"
-    )
+    await cb.message.edit_text("📝 **Enter Custom Button Name:**\n(e.g. Episode 1, Zip File)")
 
 @bot.on_callback_query(filters.regex("^up_"))
 async def upload_request(client, cb: CallbackQuery):
@@ -871,11 +764,12 @@ async def upload_request(client, cb: CallbackQuery):
 async def badge_menu_handler(client, cb: CallbackQuery):
     uid = cb.from_user.id
     user_conversations[uid]["state"] = "wait_badge_text"
-    await cb.message.edit_text("✍️ **Enter the text for the Badge:**\n(e.g., 4K HDR, Dual Audio, Bangla Dubbed)")
+    await cb.message.edit_text("✍️ **Enter the text for the Badge:**\n(e.g., 4K HDR, Dual Audio)")
 
 @bot.on_callback_query(filters.regex("^back_panel"))
 async def back_button(client, cb: CallbackQuery):
-    await show_upload_panel(cb, cb.from_user.id)
+    # Back button always edits
+    await show_upload_panel(cb.message, cb.from_user.id, is_edit=True)
 
 # ==============================================================================
 # 9. MAIN MESSAGE HANDLER (TEXT & FILES)
@@ -892,49 +786,36 @@ async def main_conversation_handler(client, message: Message):
     state = convo["state"]
     text = message.text
     
-    # -----------------------------------------------------------
-    # ADMIN BROADCAST & PREMIUM
-    # -----------------------------------------------------------
+    # --- ADMIN BROADCAST & PREMIUM ---
     if state == "admin_broadcast_wait":
         if uid != OWNER_ID: return
         msg = await message.reply_text("📣 **Broadcasting...**")
-        count = 0
         async for u in users_collection.find({}):
-            try:
-                await message.copy(chat_id=u['_id'])
-                count += 1
-                await asyncio.sleep(0.05)
-            except:
-                pass
-        await msg.edit_text(f"✅ Broadcast complete.\nSent to: {count} users.")
+            try: await message.copy(chat_id=u['_id']); await asyncio.sleep(0.05)
+            except: pass
+        await msg.edit_text("✅ Broadcast complete.")
         del user_conversations[uid]
         return
         
     elif state == "admin_add_prem_wait":
         if uid != OWNER_ID: return
         try:
-            target_id = int(text)
-            await users_collection.update_one({'_id': target_id}, {'$set': {'is_premium': True}}, upsert=True)
-            await message.reply_text(f"✅ Premium Added to ID: `{target_id}`")
-        except:
-            await message.reply_text("❌ Invalid ID.")
+            await users_collection.update_one({'_id': int(text)}, {'$set': {'is_premium': True}}, upsert=True)
+            await message.reply_text(f"✅ Premium Added to ID: `{text}`")
+        except: await message.reply_text("❌ Invalid ID.")
         del user_conversations[uid]
         return
         
     elif state == "admin_rem_prem_wait":
         if uid != OWNER_ID: return
         try:
-            target_id = int(text)
-            await users_collection.update_one({'_id': target_id}, {'$set': {'is_premium': False}})
-            await message.reply_text(f"✅ Premium Removed from ID: `{target_id}`")
-        except:
-            await message.reply_text("❌ Invalid ID.")
+            await users_collection.update_one({'_id': int(text)}, {'$set': {'is_premium': False}})
+            await message.reply_text(f"✅ Premium Removed from ID: `{text}`")
+        except: await message.reply_text("❌ Invalid ID.")
         del user_conversations[uid]
         return
 
-    # -----------------------------------------------------------
-    # MANUAL MODE INPUTS (MERGED LOGIC)
-    # -----------------------------------------------------------
+    # --- MANUAL MODE INPUTS (FIXED) ---
     if state == "wait_manual_title":
         convo["details"]["title"] = text
         convo["details"]["name"] = text
@@ -943,156 +824,102 @@ async def main_conversation_handler(client, message: Message):
         
     elif state == "wait_manual_year":
         if text.lower() == "skip":
-            convo["details"]["release_date"] = "----"
-            convo["details"]["first_air_date"] = "----"
+            convo["details"]["release_date"] = "----"; convo["details"]["first_air_date"] = "----"
         else:
-            convo["details"]["release_date"] = f"{text}-01-01"
-            convo["details"]["first_air_date"] = f"{text}-01-01"
+            convo["details"]["release_date"] = f"{text}-01-01"; convo["details"]["first_air_date"] = f"{text}-01-01"
         convo["state"] = "wait_manual_rating"
         await message.reply_text("✅ Year Saved.\n\n⭐ **Send Rating:** (e.g. 7.5)\n_Send 'skip' to leave empty._")
         
     elif state == "wait_manual_rating":
-        if text.lower() == "skip":
-             convo["details"]["vote_average"] = 0.0
-        else:
-            try:
-                convo["details"]["vote_average"] = float(text)
-            except:
-                convo["details"]["vote_average"] = 0.0
+        try: convo["details"]["vote_average"] = float(text)
+        except: convo["details"]["vote_average"] = 0.0
         convo["state"] = "wait_manual_genres"
         await message.reply_text("✅ Rating Saved.\n\n🎭 **Send Genres:** (e.g. Action, Drama)\n_Send 'skip' to leave empty._")
         
     elif state == "wait_manual_genres":
-        if text.lower() == "skip":
-            convo["details"]["genres"] = []
-        else:
-            # Format genres for the caption generator
-            genres = [{"name": g.strip()} for g in text.split(",")]
-            convo["details"]["genres"] = genres
+        if text.lower() == "skip": convo["details"]["genres"] = []
+        else: convo["details"]["genres"] = [{"name": g.strip()} for g in text.split(",")]
         convo["state"] = "wait_manual_poster"
         await message.reply_text("✅ Genres Saved.\n\n🖼 **Send Poster Photo:**")
         
     elif state == "wait_manual_poster":
-        if not message.photo:
-            return await message.reply_text("❌ Please send a Photo.")
+        if not message.photo: return await message.reply_text("❌ Please send a Photo.")
         
-        # Download poster for manual mode
         msg = await message.reply_text("⬇️ Downloading poster...")
-        photo_name = f"poster_{uid}_{int(time.time())}.jpg"
         try:
-            # Download file
-            photo_path = await client.download_media(message, file_name=photo_name)
+            photo_path = await client.download_media(message, file_name=f"poster_{uid}_{int(time.time())}.jpg")
             convo["details"]["poster_local_path"] = os.path.abspath(photo_path) 
             await msg.delete()
             
             convo["state"] = "wait_lang"
-            await message.reply_text("✅ Poster Saved.\n\n🌐 **Send Language:** (e.g. Hindi, English)")
+            # Just ask for language, no suggestions
+            await message.reply_text("✅ Poster Saved.\n\n🌐 **Enter Language:**")
         except Exception as e:
-            logger.error(f"Poster Download Error: {e}")
-            await msg.edit_text(f"❌ Error downloading poster: {e}")
+            await msg.edit_text(f"❌ Error: {e}")
 
     elif state == "wait_lang" and convo.get("is_manual"):
         convo["language"] = text
-        # Redirect to the FILE UPLOAD PANEL instead of asking for links
-        await show_upload_panel(message, uid)
+        # CRITICAL FIX: Use Reply (is_edit=False) to avoid crashing on text input
+        await show_upload_panel(message, uid, is_edit=False)
 
-    # -----------------------------------------------------------
-    # UPLOAD PANEL LOGIC (Badge & Buttons)
-    # -----------------------------------------------------------
+    # --- BADGE & CUSTOM BUTTON ---
     elif state == "wait_badge_text":
         convo["temp_badge_text"] = text
-        await show_upload_panel(message, uid)
+        await show_upload_panel(message, uid, is_edit=False)
 
     elif state == "wait_custom_btn_name":
         convo["temp_btn_name"] = text
         convo["current_quality"] = "custom"
         convo["state"] = "wait_file_upload"
-        await message.reply_text(
-            f"📤 **Upload File for: '{text}'**\n"
-            "👉 Send Video/File now."
-        )
+        await message.reply_text(f"📤 **Upload File for: '{text}'**\n👉 Send Video/File now.")
 
-    # -----------------------------------------------------------
-    # FILE UPLOAD & LOG CHANNEL BACKUP LOGIC
-    # -----------------------------------------------------------
+    # --- FILE UPLOAD LOGIC ---
     elif state == "wait_file_upload":
         if not (message.video or message.document):
             return await message.reply_text("❌ Please send a **Video** or **Document** file.")
         
-        if not LOG_CHANNEL_ID:
-            return await message.reply_text("❌ **System Error:** Log Channel ID is not set in `.env`.")
-
-        # Determine Button Name
-        if convo["current_quality"] == "custom":
-            btn_name = convo["temp_btn_name"]
-        else:
-            btn_name = convo["current_quality"]
+        if convo["current_quality"] == "custom": btn_name = convo["temp_btn_name"]
+        else: btn_name = convo["current_quality"]
         
-        # A. Notification
-        status_msg = await message.reply_text("🔄 **Processing File...**\n1. Forwarding to Log Channel...\n2. Saving to Database...\n3. Shortening Link...")
+        status_msg = await message.reply_text("🔄 **Processing File...**")
         
         try:
-            # B. Forward to Log Channel
+            # Forward to Log
             log_msg = await message.copy(chat_id=LOG_CHANNEL_ID, caption=f"#BACKUP\nUser: {uid}\nItem: {btn_name}")
-            
-            # C. Extract IDs
             backup_file_id = log_msg.video.file_id if log_msg.video else log_msg.document.file_id
-            backup_msg_id = log_msg.id
             
-            # D. Generate Data
+            # Save DB
             code = generate_random_code()
-            bot_username = await get_bot_username()
-            
             details = convo['details']
             title = details.get('title') or details.get('name') or "Unknown"
             
-            # -- Clean Caption Construction for File --
-            date = details.get("release_date") or details.get("first_air_date") or "----"
-            year = date[:4]
-            language = convo.get("language", "Unknown")
-
-            tmdb_caption = (
-                f"🎬 **Movie:** {title}\n"
-                f"📅 **Year:** {year}\n"
-                f"🔊 **Language:** {language}\n"
-                f"🔰 **Quality:** {btn_name}"
-            )
+            # Caption for File
+            tmdb_caption = f"🎬 **Movie:** {title}\n🔰 **Quality:** {btn_name}"
             
-            # E. Get User Timer Settings
             user_data = await users_collection.find_one({'_id': uid})
-            timer = user_data.get('delete_timer', 0)
             
-            # F. Save to Database
             await files_collection.insert_one({
-                "code": code,
-                "file_id": backup_file_id,  # File ID from Log Channel
-                "log_msg_id": backup_msg_id, # Msg ID from Log Channel
-                "caption": tmdb_caption, 
-                "delete_timer": timer,
-                "uploader_id": uid,
-                "created_at": datetime.now()
+                "code": code, "file_id": backup_file_id, "log_msg_id": log_msg.id,
+                "caption": tmdb_caption, "delete_timer": user_data.get('delete_timer', 0),
+                "uploader_id": uid, "created_at": datetime.now()
             })
             
-            # G. Shorten Link
-            deep_link = f"https://t.me/{bot_username}?start={code}"
-            short_link = await shorten_link(uid, deep_link)
+            # Shorten
+            bot_uname = await get_bot_username()
+            short_link = await shorten_link(uid, f"https://t.me/{bot_uname}?start={code}")
             
-            # H. Update Conversation (Store the link)
             convo['links'][btn_name] = short_link
             
-            # DONE
-            await msg.delete() # Delete user file
-            await show_upload_panel(status_msg, uid)
+            await msg.delete() # Delete user file to keep chat clean
+            # Reply with panel (fresh message)
+            await show_upload_panel(status_msg, uid, is_edit=False)
             
         except Exception as e:
             logger.error(f"Upload Error: {e}")
-            try:
-                await status_msg.edit_text(f"❌ **Error:** {str(e)}")
-            except:
-                await message.reply_text(f"❌ **Error:** {str(e)}")
+            await status_msg.edit_text(f"❌ **Error:** {str(e)}")
 
 # ==============================================================================
-# 10. FINAL POST PROCESSING & CHANNEL SELECTION
+# 10. FINAL POST PROCESSING
 # ==============================================================================
 
 @bot.on_callback_query(filters.regex("^proc_final"))
@@ -1100,87 +927,60 @@ async def process_final_post(client, cb: CallbackQuery):
     uid = cb.from_user.id
     convo = user_conversations.get(uid)
     
-    if not convo:
-        return await cb.answer("Session expired.", show_alert=True)
-    
-    if not convo['links']:
-        return await cb.answer("❌ No files uploaded!", show_alert=True)
+    if not convo: return await cb.answer("Session expired.", show_alert=True)
+    if not convo['links']: return await cb.answer("❌ No files uploaded!", show_alert=True)
         
-    await cb.message.edit_text("🖼️ **Generating Poster & Preview...**\nPlease wait a moment.")
+    await cb.message.edit_text("🖼️ **Generating Post...**")
     
-    # Check if this is a manual post
-    is_manual = convo.get("is_manual", False)
-
-    # 1. Generate Caption
+    # 1. Caption
     caption = await generate_channel_caption(
-        convo['details'],
-        convo.get('language', 'Unknown'),
-        convo['links'],
-        is_manual=is_manual
+        convo['details'], convo.get('language', 'Unknown'), convo['links'], is_manual=convo.get("is_manual", False)
     )
     
-    # 2. Create Buttons (Sort them smartly)
+    # 2. Buttons
     buttons = []
-    # Priority sorting for standard qualities
     priority = ["480p", "720p", "1080p"]
+    # Sort: Priority first, then others
     sorted_keys = sorted(convo['links'].keys(), key=lambda x: priority.index(x) if x in priority else 99)
 
     for qual in sorted_keys:
         link = convo['links'][qual]
-        if qual in priority:
-            btn_text = f"📥 Download {qual}"
-        else:
-            btn_text = f"📥 {qual}" 
+        btn_text = f"📥 Download {qual}" if qual in priority else f"📥 {qual}"
         buttons.append([InlineKeyboardButton(btn_text, url=link)])
         
-    # Add "How to Download" Button
     user_data = await users_collection.find_one({'_id': uid})
-    tutorial_link = user_data.get('tutorial_url')
+    if user_data.get('tutorial_url'):
+        buttons.append([InlineKeyboardButton("ℹ️ How to Download", url=user_data['tutorial_url'])])
     
-    if tutorial_link:
-        buttons.append([InlineKeyboardButton("ℹ️ How to Download / কিভাবে ডাউনলোড করবেন", url=tutorial_link)])
-    
-    # 3. Process Image (Watermark + Badge)
+    # 3. Poster Processing
     details = convo['details']
     poster_input = None
-    
-    # Priority: Manual Local File -> TMDB URL
     if details.get('poster_local_path') and os.path.exists(details['poster_local_path']):
         poster_input = details['poster_local_path']
     elif details.get('poster_path'):
         poster_input = f"https://image.tmdb.org/t/p/w500{details['poster_path']}"
         
-    poster_buffer, error = watermark_poster(
-        poster_input,
-        user_data.get('watermark_text'),
-        convo.get('temp_badge_text')
-    )
+    poster_buffer, error = watermark_poster(poster_input, user_data.get('watermark_text'), convo.get('temp_badge_text'))
     
-    if not poster_buffer:
-        return await cb.message.edit_text(f"❌ **Image Processing Error:** {error}")
+    if not poster_buffer: return await cb.message.edit_text(f"❌ Image Error: {error}")
     
-    # 4. Send Preview to User
+    # 4. Send Preview
     poster_buffer.seek(0)
     try:
         preview_msg = await client.send_photo(
-            chat_id=uid,
-            photo=poster_buffer,
-            caption=caption,
-            reply_markup=InlineKeyboardMarkup(buttons)
+            chat_id=uid, photo=poster_buffer, caption=caption, reply_markup=InlineKeyboardMarkup(buttons)
         )
     except Exception as e:
         return await cb.message.edit_text(f"❌ Failed to send preview: {e}")
 
     await cb.message.delete()
     
-    # 5. Store Data for Posting
+    # 5. Store for Channel Post
     convo['final_post_data'] = {
-        'file_id': preview_msg.photo.file_id, 
-        'caption': caption,
-        'buttons': buttons
+        'file_id': preview_msg.photo.file_id, 'caption': caption, 'buttons': buttons
     }
     
-    # 6. Generate Channel Selection Buttons
+    # 6. Channel Selection
     channels = user_data.get('channel_ids', [])
     channel_btns = []
     
@@ -1192,29 +992,20 @@ async def process_final_post(client, cb: CallbackQuery):
     
     channel_btns.append([InlineKeyboardButton("✅ DONE / CLOSE", callback_data="close_post")])
     
-    await client.send_message(
-        uid, 
-        "👇 **Select Channel to Publish:**\n(Clicking a button will instantly post to that channel)",
-        reply_markup=InlineKeyboardMarkup(channel_btns)
-    )
+    await client.send_message(uid, "👇 **Select Channel to Publish:**", reply_markup=InlineKeyboardMarkup(channel_btns))
 
-# Post to Channel Handler
 @bot.on_callback_query(filters.regex("^sndch_"))
 async def send_to_channel_handler(client, cb: CallbackQuery):
     uid = cb.from_user.id
     target_cid = cb.data.split("_")[1]
     convo = user_conversations.get(uid)
     
-    if not convo or 'final_post_data' not in convo:
-        return await cb.answer("❌ Session Expired.", show_alert=True)
+    if not convo or 'final_post_data' not in convo: return await cb.answer("❌ Session Expired.", show_alert=True)
     
     data = convo['final_post_data']
     try:
         await client.send_photo(
-            chat_id=int(target_cid),
-            photo=data['file_id'],
-            caption=data['caption'],
-            reply_markup=InlineKeyboardMarkup(data['buttons'])
+            chat_id=int(target_cid), photo=data['file_id'], caption=data['caption'], reply_markup=InlineKeyboardMarkup(data['buttons'])
         )
         await cb.answer(f"✅ Posted to {target_cid}", show_alert=True)
     except Exception as e:
@@ -1224,13 +1015,10 @@ async def send_to_channel_handler(client, cb: CallbackQuery):
 async def close_post_handler(client, cb: CallbackQuery):
     uid = cb.from_user.id
     if uid in user_conversations:
-        # Cleanup: Delete the local poster file if it exists
         local_path = user_conversations[uid].get('details', {}).get('poster_local_path')
         if local_path and os.path.exists(local_path):
-            try:
-                os.remove(local_path)
-            except:
-                pass     
+            try: os.remove(local_path)
+            except: pass     
         del user_conversations[uid]
         
     await cb.message.delete()
