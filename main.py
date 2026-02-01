@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
 
 # ==============================================================================
-# 🎬 ULTIMATE MOVIE BOT - FINAL UPDATED VERSION (MANUAL FIX + CLEAN CAPTION)
+# 🎬 ULTIMATE MOVIE BOT - FINAL FULL VERSION (MANUAL + FILE STORE MERGED)
 # ==============================================================================
 # Features Included:
-# 1. TMDB & IMDb Link Search Logic
-# 2. DEDICATED MANUAL POST COMMAND (/manual) - Clean & Accurate
-# 3. Face Detection & Watermarking
-# 4. Log Channel Backup System
-# 5. URL Shortener Integration
+# 1. TMDB Auto Search (/post)
+# 2. Advanced Manual Post (/manual) - With Metadata Inputs
+# 3. File Store System (Upload File -> Get Short Link)
+# 4. Face Detection & Watermarking
+# 5. Log Channel Backup
 # 6. Auto Delete Timer
-# 7. Custom Button / Episode Support
-# 8. Tutorial Link Support
-# 9. Manual Channel Selection for Posting
+# 7. URL Shortener Integration
+# 8. Channel Management
 # ==============================================================================
 
 # ---- Core Python Imports ----
@@ -271,7 +270,7 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
     Advanced poster editor:
     - Adds text watermark (bottom).
     - Adds custom badge (top) with face detection.
-    - UPDATED: Handles URL, Local File Path, or BytesIO.
+    - Handles URL, Local File Path, or BytesIO.
     """
     if not poster_input:
         return None, "Poster not found."
@@ -450,28 +449,26 @@ def get_tmdb_details(media_type, media_id):
         return None
 
 # ==============================================================================
-# 🆕 UPDATED CAPTION GENERATOR (MANUAL MODE FIX)
+# CAPTION GENERATOR
 # ==============================================================================
 async def generate_channel_caption(data: dict, language: str, short_links: dict, is_manual: bool = False):
     """
     Generates the text caption.
-    If is_manual is True, it DOES NOT add the promotional footer.
     """
     title = data.get("title") or data.get("name") or "Movie"
     date = data.get("release_date") or data.get("first_air_date") or "----"
     year = date[:4]
     rating_val = data.get('vote_average', 0)
-    if rating_val:
-        rating = f"{rating_val:.1f}"
-    else:
-        rating = "N/A"
+    rating = f"{rating_val:.1f}"
     
     if isinstance(data.get("genres"), list) and len(data["genres"]) > 0:
-        genre_str = ", ".join([g["name"] for g in data.get("genres", [])[:3]])
+        if isinstance(data["genres"][0], dict):
+            genre_str = ", ".join([g["name"] for g in data.get("genres", [])[:3]])
+        else:
+            genre_str = str(data.get("genres")) # For manual input
     else:
         genre_str = "N/A"
 
-    # Base Info (Clean Caption)
     caption = f"""🎬 **{title} ({year})**
 ━━━━━━━━━━━━━━━━━━━━━━━
 ⭐ **Rating:** {rating}/10
@@ -479,11 +476,6 @@ async def generate_channel_caption(data: dict, language: str, short_links: dict,
 🔊 **Language:** {language}
 ━━━━━━━━━━━━━━━━━━━━━━━"""
 
-    # 🛑 CHECK: If Manual Post, Return ONLY this info. No footer.
-    if is_manual:
-        return caption
-
-    # If Automatic (TMDB) Post, Add Promotional Text
     caption += """
 👀 𝗪𝗔𝗧𝗖𝗛 𝗢𝗡𝗟𝗜𝗡𝗘/📤𝗗𝗢𝗪𝗡𝗟𝗢𝗔𝗗
 👇  ℍ𝕚𝕘𝕙 𝕊𝕡𝕖𝕖𝕕 | ℕ𝕠 𝔹𝕦𝕗𝕗𝕖𝕣𝕚𝕟𝕘  👇"""
@@ -509,7 +501,7 @@ async def start_cmd(client, message: Message):
     await add_user_to_db(user)
     
     # ------------------------------------------------------------------
-    # 🚀 FILE RETRIEVAL SYSTEM
+    # 🚀 FILE RETRIEVAL SYSTEM (Core Feature)
     # ------------------------------------------------------------------
     if len(message.command) > 1:
         code = message.command[1]
@@ -664,7 +656,6 @@ async def settings_commands(client, message: Message):
         else:
             await message.reply_text("❌ Usage: `/setdomain shrinkme.io`")
             
-    # 🆕 UPDATED TUTORIAL SETTING COMMAND (LINK BASED)
     elif cmd == "settutorial":
         if len(message.command) > 1:
             link = message.command[1]
@@ -674,7 +665,7 @@ async def settings_commands(client, message: Message):
             else:
                 await message.reply_text("❌ Invalid Link! Must start with `http` or `https`.")
         else:
-            await message.reply_text("❌ **Usage:** `/settutorial https://t.me/your_post_link`\nor `/settutorial https://youtube.com/watch?v=...`")
+            await message.reply_text("❌ **Usage:** `/settutorial https://t.me/your_post_link`")
 
     elif cmd == "settimer":
         if len(message.command) > 1:
@@ -712,7 +703,7 @@ async def settings_commands(client, message: Message):
             await message.reply_text("❌ No channels saved.")
 
 # ==============================================================================
-# 6. POST CREATION FLOW (TMDB + IMDb)
+# 6. AUTO POST CREATION FLOW (TMDB + IMDb)
 # ==============================================================================
 
 @bot.on_message(filters.command("post") & filters.private)
@@ -750,8 +741,9 @@ async def post_search_cmd(client, message: Message):
     else:
         await msg.edit_text(f"👇 **Found {len(results)} Result(s):**", reply_markup=InlineKeyboardMarkup(buttons))
 
+
 # ==============================================================================
-# 🆕 6.1 DEDICATED MANUAL POST COMMAND (OPEN FOR ALL)
+# 7. NEW MANUAL POST SYSTEM (MERGED FEATURES)
 # ==============================================================================
 
 @bot.on_message(filters.command("manual") & filters.private)
@@ -759,7 +751,6 @@ async def post_search_cmd(client, message: Message):
 async def manual_cmd_start(client, message: Message):
     """
     Dedicated Manual Post Entry Point.
-    No premium check required here.
     """
     await message.reply_text(
         "📝 **Manual Post Creation**\n\nWhat are you uploading?",
@@ -779,12 +770,12 @@ async def manual_type_handler(client, cb: CallbackQuery):
         "details": {"media_type": m_type},
         "links": {},
         "state": "wait_manual_title",
-        "is_manual": True # Flag set for Clean Caption
+        "is_manual": True 
     }
     await cb.message.edit_text(f"📝 **Step 1:** Send the **Title** of the {m_type}.")
 
 # ==============================================================================
-# 7. CALLBACK HANDLERS & UPLOAD PANEL
+# 8. UPLOAD PANEL & HANDLERS (SHARED LOGIC)
 # ==============================================================================
 
 @bot.on_callback_query(filters.regex("^sel_"))
@@ -819,20 +810,23 @@ async def language_selected(client, cb: CallbackQuery):
     await show_upload_panel(cb.message, uid)
 
 async def show_upload_panel(message, uid):
-    """Shows the panel to upload files for different qualities."""
+    """
+    Shows the panel to upload files.
+    Works for BOTH Auto Post and Manual Post.
+    """
     buttons = [
         [InlineKeyboardButton("📤 Upload 480p", callback_data="up_480p")],
         [InlineKeyboardButton("📤 Upload 720p", callback_data="up_720p")],
         [InlineKeyboardButton("📤 Upload 1080p", callback_data="up_1080p")],
         # Custom Episode Button
         [InlineKeyboardButton("➕ Add Episode / Custom Button", callback_data="add_custom_btn")],
-        [InlineKeyboardButton("🇧🇩 Badge: Bangla", callback_data="bdg_bangla"),
-         InlineKeyboardButton("⏭ Skip Badge", callback_data="bdg_skip")],
+        [InlineKeyboardButton("🎨 Badge Settings", callback_data="set_badge")],
         [InlineKeyboardButton("✅ FINISH & POST", callback_data="proc_final")]
     ]
     
-    links = user_conversations[uid].get('links', {})
-    badge = user_conversations[uid].get('temp_badge_text', 'Not Set')
+    convo = user_conversations.get(uid, {})
+    links = convo.get('links', {})
+    badge = convo.get('temp_badge_text', 'None')
     
     status_text = "\n".join([f"✅ **{k}** Added" for k in links.keys()])
     if not status_text: status_text = "No files added yet."
@@ -846,7 +840,6 @@ async def show_upload_panel(message, uid):
     else:
         await message.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
-# Custom Button Name Handler
 @bot.on_callback_query(filters.regex("^add_custom_btn"))
 async def add_custom_btn_handler(client, cb: CallbackQuery):
     uid = cb.from_user.id
@@ -874,24 +867,18 @@ async def upload_request(client, cb: CallbackQuery):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="back_panel")]])
     )
 
-@bot.on_callback_query(filters.regex("^bdg_"))
-async def badge_handler(client, cb: CallbackQuery):
-    action = cb.data.split("_")[1]
+@bot.on_callback_query(filters.regex("^set_badge"))
+async def badge_menu_handler(client, cb: CallbackQuery):
     uid = cb.from_user.id
-    
-    if action == "bangla":
-        user_conversations[uid]['temp_badge_text'] = "বাংলা ডাবিং"
-    elif action == "skip":
-        user_conversations[uid]['temp_badge_text'] = None
-        
-    await show_upload_panel(cb, uid)
+    user_conversations[uid]["state"] = "wait_badge_text"
+    await cb.message.edit_text("✍️ **Enter the text for the Badge:**\n(e.g., 4K HDR, Dual Audio, Bangla Dubbed)")
 
 @bot.on_callback_query(filters.regex("^back_panel"))
 async def back_button(client, cb: CallbackQuery):
     await show_upload_panel(cb, cb.from_user.id)
 
 # ==============================================================================
-# 8. MAIN MESSAGE HANDLER (TEXT & FILES)
+# 9. MAIN MESSAGE HANDLER (TEXT & FILES)
 # ==============================================================================
 
 @bot.on_message(filters.private & (filters.text | filters.video | filters.document | filters.photo))
@@ -946,7 +933,7 @@ async def main_conversation_handler(client, message: Message):
         return
 
     # -----------------------------------------------------------
-    # MANUAL MODE INPUTS (UPDATED - SAFE FILE HANDLING)
+    # MANUAL MODE INPUTS (MERGED LOGIC)
     # -----------------------------------------------------------
     if state == "wait_manual_title":
         convo["details"]["title"] = text
@@ -979,6 +966,7 @@ async def main_conversation_handler(client, message: Message):
         if text.lower() == "skip":
             convo["details"]["genres"] = []
         else:
+            # Format genres for the caption generator
             genres = [{"name": g.strip()} for g in text.split(",")]
             convo["details"]["genres"] = genres
         convo["state"] = "wait_manual_poster"
@@ -988,13 +976,12 @@ async def main_conversation_handler(client, message: Message):
         if not message.photo:
             return await message.reply_text("❌ Please send a Photo.")
         
-        # নিরাপদ ছবি ডাউনলোডিং (Safe Local Download)
+        # Download poster for manual mode
         msg = await message.reply_text("⬇️ Downloading poster...")
         photo_name = f"poster_{uid}_{int(time.time())}.jpg"
         try:
             # Download file
             photo_path = await client.download_media(message, file_name=photo_name)
-            # Store ABSOLUTE path
             convo["details"]["poster_local_path"] = os.path.abspath(photo_path) 
             await msg.delete()
             
@@ -1006,9 +993,16 @@ async def main_conversation_handler(client, message: Message):
 
     elif state == "wait_lang" and convo.get("is_manual"):
         convo["language"] = text
+        # Redirect to the FILE UPLOAD PANEL instead of asking for links
         await show_upload_panel(message, uid)
 
-    # CUSTOM BUTTON NAME HANDLER
+    # -----------------------------------------------------------
+    # UPLOAD PANEL LOGIC (Badge & Buttons)
+    # -----------------------------------------------------------
+    elif state == "wait_badge_text":
+        convo["temp_badge_text"] = text
+        await show_upload_panel(message, uid)
+
     elif state == "wait_custom_btn_name":
         convo["temp_btn_name"] = text
         convo["current_quality"] = "custom"
@@ -1052,7 +1046,7 @@ async def main_conversation_handler(client, message: Message):
             details = convo['details']
             title = details.get('title') or details.get('name') or "Unknown"
             
-            # -- Clean Caption Construction (Name, Year, Language, Quality) --
+            # -- Clean Caption Construction for File --
             date = details.get("release_date") or details.get("first_air_date") or "----"
             year = date[:4]
             language = convo.get("language", "Unknown")
@@ -1073,7 +1067,7 @@ async def main_conversation_handler(client, message: Message):
                 "code": code,
                 "file_id": backup_file_id,  # File ID from Log Channel
                 "log_msg_id": backup_msg_id, # Msg ID from Log Channel
-                "caption": tmdb_caption, # Only clean caption stored
+                "caption": tmdb_caption, 
                 "delete_timer": timer,
                 "uploader_id": uid,
                 "created_at": datetime.now()
@@ -1083,10 +1077,11 @@ async def main_conversation_handler(client, message: Message):
             deep_link = f"https://t.me/{bot_username}?start={code}"
             short_link = await shorten_link(uid, deep_link)
             
-            # H. Update Conversation (Use specific button name)
+            # H. Update Conversation (Store the link)
             convo['links'][btn_name] = short_link
             
             # DONE
+            await msg.delete() # Delete user file
             await show_upload_panel(status_msg, uid)
             
         except Exception as e:
@@ -1097,7 +1092,7 @@ async def main_conversation_handler(client, message: Message):
                 await message.reply_text(f"❌ **Error:** {str(e)}")
 
 # ==============================================================================
-# 9. FINAL POST PROCESSING & CHANNEL SELECTION
+# 10. FINAL POST PROCESSING & CHANNEL SELECTION
 # ==============================================================================
 
 @bot.on_callback_query(filters.regex("^proc_final"))
@@ -1116,7 +1111,7 @@ async def process_final_post(client, cb: CallbackQuery):
     # Check if this is a manual post
     is_manual = convo.get("is_manual", False)
 
-    # 1. Generate Caption (Pass is_manual flag)
+    # 1. Generate Caption
     caption = await generate_channel_caption(
         convo['details'],
         convo.get('language', 'Unknown'),
@@ -1124,31 +1119,34 @@ async def process_final_post(client, cb: CallbackQuery):
         is_manual=is_manual
     )
     
-    # 2. Create Buttons (Handle Custom Names properly)
+    # 2. Create Buttons (Sort them smartly)
     buttons = []
-    for qual, link in convo['links'].items():
-        if qual in ["480p", "720p", "1080p"]:
+    # Priority sorting for standard qualities
+    priority = ["480p", "720p", "1080p"]
+    sorted_keys = sorted(convo['links'].keys(), key=lambda x: priority.index(x) if x in priority else 99)
+
+    for qual in sorted_keys:
+        link = convo['links'][qual]
+        if qual in priority:
             btn_text = f"📥 Download {qual}"
         else:
             btn_text = f"📥 {qual}" 
         buttons.append([InlineKeyboardButton(btn_text, url=link)])
         
-    # 🆕 NEW: Add "How to Download" Button from User Settings
+    # Add "How to Download" Button
     user_data = await users_collection.find_one({'_id': uid})
     tutorial_link = user_data.get('tutorial_url')
     
     if tutorial_link:
         buttons.append([InlineKeyboardButton("ℹ️ How to Download / কিভাবে ডাউনলোড করবেন", url=tutorial_link)])
     
-    # 3. Process Image (Watermark + Badge) [UPDATED MANUAL LOGIC]
+    # 3. Process Image (Watermark + Badge)
     details = convo['details']
-    
     poster_input = None
     
-    # Priority 1: Manual Local File Check (Prioritize Manual Upload)
+    # Priority: Manual Local File -> TMDB URL
     if details.get('poster_local_path') and os.path.exists(details['poster_local_path']):
         poster_input = details['poster_local_path']
-    # Priority 2: TMDB Poster Path (Only if not manual/local not found)
     elif details.get('poster_path'):
         poster_input = f"https://image.tmdb.org/t/p/w500{details['poster_path']}"
         
@@ -1159,14 +1157,9 @@ async def process_final_post(client, cb: CallbackQuery):
     )
     
     if not poster_buffer:
-        # Fallback if no poster found/error
-        if error:
-            logger.error(f"Poster Error: {error}")
-            return await cb.message.edit_text(f"❌ **Image Processing Error:** {error}\n(Did you upload a poster in manual mode?)")
-        else:
-             return await cb.message.edit_text("❌ Poster not found.")
+        return await cb.message.edit_text(f"❌ **Image Processing Error:** {error}")
     
-    # 4. Send Preview to User FIRST
+    # 4. Send Preview to User
     poster_buffer.seek(0)
     try:
         preview_msg = await client.send_photo(
@@ -1182,7 +1175,7 @@ async def process_final_post(client, cb: CallbackQuery):
     
     # 5. Store Data for Posting
     convo['final_post_data'] = {
-        'file_id': preview_msg.photo.file_id, # Use cached file_id from preview
+        'file_id': preview_msg.photo.file_id, 
         'caption': caption,
         'buttons': buttons
     }
@@ -1236,9 +1229,8 @@ async def close_post_handler(client, cb: CallbackQuery):
         if local_path and os.path.exists(local_path):
             try:
                 os.remove(local_path)
-            except Exception as e:
-                logger.warning(f"Failed to delete temp file: {e}")
-                
+            except:
+                pass     
         del user_conversations[uid]
         
     await cb.message.delete()
