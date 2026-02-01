@@ -1,9 +1,15 @@
 # -*- coding: utf-8 -*-
 
 # ==============================================================================
-# 🎬 ULTIMATE MOVIE BOT - ALL IN ONE (Final Fixed Version)
-# Features: TMDB, Manual Post, Face Detect Watermark, Log Channel, Shortener, Auto Delete
-# Fixed: Message Edit Error & Clean Caption Format
+# 🎬 ULTIMATE MOVIE BOT - ALL IN ONE (Full Expanded Version)
+# Features: 
+# 1. TMDB & IMDb Link Search
+# 2. Manual Post Creation
+# 3. Face Detect Watermark & Badge
+# 4. Log Channel Backup
+# 5. URL Shortener Support
+# 6. Auto Delete Timer
+# 7. Select Channel to Post (Manual Control)
 # ==============================================================================
 
 # ---- Core Python Imports ----
@@ -47,7 +53,7 @@ TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 FORCE_SUB_CHANNEL = os.getenv("FORCE_SUB_CHANNEL")
 INVITE_LINK = os.getenv("INVITE_LINK")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) # 🆕 Required for file backup
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) 
 
 # Database
 DB_URI = os.getenv("DATABASE_URI")
@@ -69,7 +75,7 @@ if not DB_URI:
 db_client = motor.motor_asyncio.AsyncIOMotorClient(DB_URI)
 db = db_client[DB_NAME]
 users_collection = db.users
-files_collection = db.files  # Stores file metadata and log channel IDs
+files_collection = db.files 
 
 # Global Variables
 user_conversations = {}
@@ -90,7 +96,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ Bot with Log Channel is Running Successfully!"
+    return "✅ Bot is Running Successfully!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
@@ -133,7 +139,6 @@ async def auto_delete_message(client, chat_id, message_id, delay_seconds):
         await asyncio.sleep(delay_seconds)
         try:
             await client.delete_messages(chat_id, message_id)
-            logger.info(f"🗑️ Auto-deleted message {message_id} in chat {chat_id}")
         except Exception as e:
             logger.warning(f"Failed to auto-delete message: {e}")
 
@@ -267,7 +272,11 @@ def check_premium(func):
 # ==============================================================================
 
 def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
-    """Advanced poster editor: Watermark + Face Detect Badge"""
+    """
+    Advanced poster editor:
+    - Adds text watermark (bottom).
+    - Adds custom badge (top) with face detection to avoid covering faces.
+    """
     if not poster_input:
         return None, "Poster not found."
     
@@ -283,7 +292,7 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
         img.paste(original_img)
         draw = ImageDraw.Draw(img)
 
-        # ---- Badge Logic ----
+        # ---- Badge Logic (with Gradient & Face Detect) ----
         if badge_text:
             badge_font_size = int(img.width / 9)
             font_path = download_font()
@@ -292,6 +301,7 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
             except:
                 badge_font = ImageFont.load_default()
 
+            # Calculate Text Size
             bbox = draw.textbbox((0, 0), badge_text, font=badge_font)
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
@@ -308,23 +318,25 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
                     face_cascade = cv2.CascadeClassifier(cascade_path)
                     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
                     
-                    is_collision = False
+                    # Check collision
                     padding = int(badge_font_size * 0.2)
                     text_box_y1 = y_pos + text_height + padding
                     
+                    is_collision = False
                     for (fx, fy, fw, fh) in faces:
                         if y_pos < (fy + fh) and text_box_y1 > fy:
                             is_collision = True
                             break
                     
                     if is_collision:
-                        y_pos = img.height * 0.25 
+                        y_pos = img.height * 0.25  # Move down if face detected at top
                 except Exception as e:
                     logger.error(f"Face detection failed: {e}")
 
             y = y_pos
             padding = int(badge_font_size * 0.15)
             
+            # Draw Semi-transparent Background for Badge
             rect_layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
             rect_draw = ImageDraw.Draw(rect_layer)
             rect_draw.rectangle(
@@ -334,12 +346,12 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
             img = Image.alpha_composite(img, rect_layer)
             draw = ImageDraw.Draw(img)
 
-            # Gradient Text
+            # Draw Gradient Text
             gradient = Image.new('RGBA', (text_width, text_height + int(padding)), (0, 0, 0, 0))
             gradient_draw = ImageDraw.Draw(gradient)
             
-            start_color = (255, 255, 0)
-            end_color = (255, 69, 0)
+            start_color = (255, 255, 0) # Yellow
+            end_color = (255, 69, 0)   # OrangeRed
             
             for i in range(text_width):
                 ratio = i / text_width
@@ -370,7 +382,9 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
             wx = (img.width - text_width) / 2
             wy = img.height - bbox[3] - (img.height * 0.05)
             
+            # Shadow
             draw.text((wx + 2, wy + 2), watermark_text, font=font, fill=(0, 0, 0, 128))
+            # Text
             draw.text((wx, wy), watermark_text, font=font, fill=(255, 255, 255, 200))
             
         buffer = io.BytesIO()
@@ -382,10 +396,10 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
     except Exception as e:
         return None, str(e)
 
-# --- TMDB Functions ---
+# --- TMDB & IMDb Functions ---
 
 def search_tmdb(query: str):
-    """Search TMDB for movies/tv shows."""
+    """Search TMDB for movies/tv shows by text."""
     url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={query}&include_adult=true"
     try:
         r = requests.get(url, timeout=10)
@@ -395,6 +409,26 @@ def search_tmdb(query: str):
         return [res for res in results if res.get("media_type") in ["movie", "tv"]][:5]
     except Exception as e:
         logger.error(f"TMDB Search Error: {e}")
+        return []
+
+def search_by_imdb(imdb_id: str):
+    """Find media on TMDB using IMDb ID (ttxxxxxxx)."""
+    url = f"https://api.themoviedb.org/3/find/{imdb_id}?api_key={TMDB_API_KEY}&external_source=imdb_id"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        results = []
+        # Combine results from movie and tv
+        for item in data.get("movie_results", []):
+            item['media_type'] = 'movie'
+            results.append(item)
+        for item in data.get("tv_results", []):
+            item['media_type'] = 'tv'
+            results.append(item)
+        return results
+    except Exception as e:
+        logger.error(f"IMDb Find Error: {e}")
         return []
 
 def get_tmdb_details(media_type, media_id):
@@ -409,7 +443,7 @@ def get_tmdb_details(media_type, media_id):
         return None
 
 async def generate_channel_caption(data: dict, language: str, short_links: dict):
-    """Generates the text caption for the channel post."""
+    """Generates the text caption for the channel post (Fancy Version)."""
     title = data.get("title") or data.get("name") or "Movie"
     date = data.get("release_date") or data.get("first_air_date") or "----"
     year = date[:4]
@@ -420,6 +454,7 @@ async def generate_channel_caption(data: dict, language: str, short_links: dict)
     else:
         genre_str = "N/A"
 
+    # Fancy Caption for Channels
     caption = f"""🎬 **{title} ({year})**
 ━━━━━━━━━━━━━━━━━━━━━━━
 ⭐ **Rating:** {rating}/10
@@ -463,7 +498,7 @@ async def start_cmd(client, message: Message):
             
             # 2. Get Info
             log_msg_id = file_data.get("log_msg_id")
-            # Only use specific caption (No extra text)
+            # Only use specific clean caption (No extra text)
             caption = file_data.get("caption", "🎬 **Movie File**")
             timer = file_data.get("delete_timer", 0)
 
@@ -515,6 +550,7 @@ async def start_cmd(client, message: Message):
     is_premium = await is_user_premium(uid)
     
     if uid == OWNER_ID:
+        # Admin Menu
         welcome_text = f"👑 **Welcome Boss!**\n\n**Admin Control Panel:**"
         buttons = InlineKeyboardMarkup([
             [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast"),
@@ -524,6 +560,7 @@ async def start_cmd(client, message: Message):
              [InlineKeyboardButton("⚙️ Setup Instructions", callback_data="api_help")]
         ])
     else:
+        # User Menu
         status_text = "💎 **Premium User**" if is_premium else "👤 **Free User**"
         welcome_text = f"👋 **Hello {user.first_name}!**\n\nYour Status: {status_text}\n\nUse `/post` to create new posts."
         
@@ -642,7 +679,7 @@ async def settings_commands(client, message: Message):
             await message.reply_text("❌ No channels saved.")
 
 # ==============================================================================
-# 6. POST CREATION FLOW
+# 6. POST CREATION FLOW (TMDB + IMDb + Manual)
 # ==============================================================================
 
 @bot.on_message(filters.command("post") & filters.private)
@@ -650,12 +687,23 @@ async def settings_commands(client, message: Message):
 @check_premium
 async def post_search_cmd(client, message: Message):
     if len(message.command) == 1:
-        return await message.reply_text("**Usage:** `/post Movie Name`")
+        return await message.reply_text("**Usage:**\n1. `/post Movie Name`\n2. `/post IMDb-Link/ID` (e.g. tt1234567)")
     
     query = " ".join(message.command[1:]).strip()
-    msg = await message.reply_text(f"🔍 Searching TMDB for `{query}`...")
+    msg = await message.reply_text(f"🔍 **Searching...**\n`{query}`")
     
-    results = search_tmdb(query)
+    results = []
+    
+    # 🆕 CHECK: Is it an IMDb ID/Link?
+    imdb_match = re.search(r'tt\d+', query)
+    
+    if imdb_match:
+        # Search via IMDb ID
+        imdb_id = imdb_match.group(0)
+        results = search_by_imdb(imdb_id)
+    else:
+        # Search via Name
+        results = search_tmdb(query)
     
     buttons = []
     for r in results:
@@ -666,10 +714,10 @@ async def post_search_cmd(client, message: Message):
     
     buttons.append([InlineKeyboardButton("📝 Create Manually (No TMDB)", callback_data="manual_start")])
     
-    if not buttons:
-        await msg.edit_text("❌ No results found on TMDB.")
+    if not results:
+        await msg.edit_text("❌ **No results found!**\nMake sure the IMDb ID is correct or try searching by Name.")
     else:
-        await msg.edit_text(f"👇 **Select a result for:** `{query}`", reply_markup=InlineKeyboardMarkup(buttons))
+        await msg.edit_text(f"👇 **Found {len(results)} Result(s):**", reply_markup=InlineKeyboardMarkup(buttons))
 
 # --- Manual Mode Handlers ---
 
@@ -959,7 +1007,7 @@ async def main_conversation_handler(client, message: Message):
                 await message.reply_text(f"❌ **Error:** {str(e)}")
 
 # ==============================================================================
-# 8. FINAL POST PROCESSING
+# 8. FINAL POST PROCESSING & CHANNEL SELECTION
 # ==============================================================================
 
 @bot.on_callback_query(filters.regex("^proc_final"))
@@ -973,9 +1021,9 @@ async def process_final_post(client, cb: CallbackQuery):
     if not convo['links']:
         return await cb.answer("❌ No files uploaded!", show_alert=True)
         
-    await cb.message.edit_text("🖼️ **Generating Poster & Caption...**\nPlease wait a moment.")
+    await cb.message.edit_text("🖼️ **Generating Poster & Preview...**\nPlease wait a moment.")
     
-    # 1. Generate Caption
+    # 1. Generate Caption (Fancy for Channel)
     caption = await generate_channel_caption(
         convo['details'],
         convo.get('language', 'Unknown'),
@@ -1004,43 +1052,77 @@ async def process_final_post(client, cb: CallbackQuery):
         convo.get('temp_badge_text')
     )
     
-    # 4. Post to Channels
-    channels = user_data.get('channel_ids', [])
+    if not poster_buffer:
+        return await cb.message.edit_text(f"❌ **Image Processing Error:** {error}")
     
-    if poster_buffer and channels:
-        success_count = 0
-        for cid in channels:
-            try:
-                poster_buffer.seek(0)
-                await client.send_photo(
-                    int(cid),
-                    photo=poster_buffer,
-                    caption=caption,
-                    reply_markup=InlineKeyboardMarkup(buttons)
-                )
-                success_count += 1
-            except Exception as e:
-                logger.error(f"Failed to post to {cid}: {e}")
-        
-        await cb.message.edit_text(f"✅ **Posted Successfully to {success_count} channels!**")
-        
-    elif poster_buffer:
-        # No channels saved, send preview to user
-        poster_buffer.seek(0)
-        await client.send_photo(
-            uid,
+    # 4. Send Preview to User FIRST
+    poster_buffer.seek(0)
+    try:
+        preview_msg = await client.send_photo(
+            chat_id=uid,
             photo=poster_buffer,
             caption=caption,
             reply_markup=InlineKeyboardMarkup(buttons)
         )
-        await cb.message.edit_text("✅ **Preview Sent!**\n(No channels saved to post automatically).")
-        
-    else:
-        await cb.message.edit_text(f"❌ **Image Processing Error:** {error}")
+    except Exception as e:
+        return await cb.message.edit_text(f"❌ Failed to send preview: {e}")
 
-    # Clear Conversation
+    await cb.message.delete()
+    
+    # 5. Store Data for Posting
+    convo['final_post_data'] = {
+        'file_id': preview_msg.photo.file_id, # Use cached file_id from preview
+        'caption': caption,
+        'buttons': buttons
+    }
+    
+    # 6. Generate Channel Selection Buttons
+    channels = user_data.get('channel_ids', [])
+    channel_btns = []
+    
+    if channels:
+        for cid in channels:
+            # We use ID directly here. 
+            channel_btns.append([InlineKeyboardButton(f"📢 Post to: {cid}", callback_data=f"sndch_{cid}")])
+    else:
+        await client.send_message(uid, "⚠️ **No Channels Saved!** Add using `/addchannel <id>`.")
+    
+    channel_btns.append([InlineKeyboardButton("✅ DONE / CLOSE", callback_data="close_post")])
+    
+    await client.send_message(
+        uid, 
+        "👇 **Select Channel to Publish:**\n(Clicking a button will instantly post to that channel)",
+        reply_markup=InlineKeyboardMarkup(channel_btns)
+    )
+
+@bot.on_callback_query(filters.regex("^sndch_"))
+async def send_to_channel_handler(client, cb: CallbackQuery):
+    uid = cb.from_user.id
+    target_cid = cb.data.split("_")[1]
+    convo = user_conversations.get(uid)
+    
+    if not convo or 'final_post_data' not in convo:
+        return await cb.answer("❌ Session Expired.", show_alert=True)
+    
+    data = convo['final_post_data']
+    try:
+        await client.send_photo(
+            chat_id=int(target_cid),
+            photo=data['file_id'],
+            caption=data['caption'],
+            reply_markup=InlineKeyboardMarkup(data['buttons'])
+        )
+        await cb.answer(f"✅ Posted to {target_cid}", show_alert=True)
+    except Exception as e:
+        await cb.answer(f"❌ Failed: {e}", show_alert=True)
+
+@bot.on_callback_query(filters.regex("^close_post"))
+async def close_post_handler(client, cb: CallbackQuery):
+    uid = cb.from_user.id
     if uid in user_conversations:
         del user_conversations[uid]
+    await cb.message.delete()
+    await cb.answer("✅ Session Closed.", show_alert=True)
 
 if __name__ == "__main__":
     logger.info("🚀 Bot is starting...")
