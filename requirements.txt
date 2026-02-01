@@ -1,0 +1,9 @@
+pyrogram
+Pillow
+flask
+python-dotenv
+requests
+motor
+TgCrypto
+opencv-python-headless
+numpy
