@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
 
 # ==============================================================================
-# 🎬 ULTIMATE MOVIE BOT - ALL IN ONE (Final Pro Version)
-# Features: 
-# 1. TMDB & IMDb Link Search
-# 2. Manual Post Creation
-# 3. Face Detect Watermark & Badge
-# 4. Log Channel Backup
-# 5. URL Shortener Support
-# 6. Select Channel to Post (Manual Control)
-# 7. How to Download (Tutorial Video System) [NEW]
+# 🎬 ULTIMATE MOVIE BOT - FINAL EXPANDED VERSION
+# ==============================================================================
+# Features Included:
+# 1. TMDB & IMDb Link Search Logic
+# 2. Manual Post Creation Flow
+# 3. Face Detection & Watermarking
+# 4. Log Channel Backup System
+# 5. URL Shortener Integration
+# 6. Auto Delete Timer
+# 7. Custom Button / Episode Support
+# 8. Tutorial Video Support
+# 9. Manual Channel Selection for Posting
 # ==============================================================================
 
 # ---- Core Python Imports ----
@@ -55,7 +58,7 @@ INVITE_LINK = os.getenv("INVITE_LINK")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) 
 
-# Database
+# Database Configuration
 DB_URI = os.getenv("DATABASE_URI")
 DB_NAME = os.getenv("DATABASE_NAME", "MovieBotDB")
 
@@ -66,18 +69,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Check Database
+# Check Database Connection
 if not DB_URI:
     logger.critical("CRITICAL: DATABASE_URI is not set. Bot cannot start.")
     exit()
 
-# Initialize MongoDB
+# Initialize MongoDB Client
 db_client = motor.motor_asyncio.AsyncIOMotorClient(DB_URI)
 db = db_client[DB_NAME]
 users_collection = db.users
 files_collection = db.files 
 
-# Global Variables
+# Global Variables for Session Management
 user_conversations = {}
 BOT_USERNAME = ""
 
@@ -90,7 +93,7 @@ bot = Client(
 )
 
 # ==============================================================================
-# FLASK KEEP-ALIVE SERVER
+# FLASK KEEP-ALIVE SERVER (For 24/7 Hosting)
 # ==============================================================================
 app = Flask(__name__)
 
@@ -101,6 +104,7 @@ def home():
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
+# Start Flask in a separate thread
 Thread(target=run_flask, daemon=True).start()
 
 
@@ -109,7 +113,7 @@ Thread(target=run_flask, daemon=True).start()
 # ==============================================================================
 
 async def get_bot_username():
-    """Fetch and cache the bot username."""
+    """Fetch and cache the bot username to avoid repeated API calls."""
     global BOT_USERNAME
     if not BOT_USERNAME:
         me = await bot.get_me()
@@ -117,7 +121,7 @@ async def get_bot_username():
     return BOT_USERNAME
 
 def humanbytes(size):
-    """Convert bytes to readable format (MB, GB)."""
+    """Convert bytes to readable format (MB, GB) for captions."""
     if not size:
         return ""
     power = 2**10
@@ -134,7 +138,7 @@ def generate_random_code(length=8):
     return ''.join(secrets.choice(chars) for _ in range(length))
 
 async def auto_delete_message(client, chat_id, message_id, delay_seconds):
-    """Background task to delete a message after a delay."""
+    """Background task to delete a message after a specific delay."""
     if delay_seconds > 0:
         await asyncio.sleep(delay_seconds)
         try:
@@ -142,7 +146,7 @@ async def auto_delete_message(client, chat_id, message_id, delay_seconds):
         except Exception as e:
             logger.warning(f"Failed to auto-delete message: {e}")
 
-# --- Resource Downloaders ---
+# --- Resource Downloaders (Fonts & Face Cascades) ---
 
 def download_cascade():
     """Download OpenCV Face Cascade file if not exists."""
@@ -202,6 +206,7 @@ async def shorten_link(user_id: int, long_url: str):
     """Shorten a URL using the user's API settings."""
     user_data = await users_collection.find_one({'_id': user_id})
     
+    # Check if user has setup shortener
     if not user_data or 'shortener_api' not in user_data or 'shortener_url' not in user_data:
         return long_url # Return original if API not set
 
@@ -221,10 +226,11 @@ async def shorten_link(user_id: int, long_url: str):
         return long_url
 
 # ==============================================================================
-# 3. DECORATORS
+# 3. DECORATORS (Access Control)
 # ==============================================================================
 
 def force_subscribe(func):
+    """Decorator to enforce channel subscription."""
     async def wrapper(client, message):
         if FORCE_SUB_CHANNEL:
             try:
@@ -255,6 +261,7 @@ def force_subscribe(func):
     return wrapper
 
 def check_premium(func):
+    """Decorator to restrict features to Premium users."""
     async def wrapper(client, message):
         if await is_user_premium(message.from_user.id):
             await func(client, message)
@@ -281,7 +288,7 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
         return None, "Poster not found."
     
     try:
-        # Load Image
+        # Load Image from URL or Bytes
         if isinstance(poster_input, str):
             img_data = requests.get(poster_input, timeout=15).content
             original_img = Image.open(io.BytesIO(img_data)).convert("RGBA")
@@ -795,6 +802,8 @@ async def show_upload_panel(message, uid):
         [InlineKeyboardButton("📤 Upload 480p", callback_data="up_480p")],
         [InlineKeyboardButton("📤 Upload 720p", callback_data="up_720p")],
         [InlineKeyboardButton("📤 Upload 1080p", callback_data="up_1080p")],
+        # 🆕 Custom Episode Button
+        [InlineKeyboardButton("➕ Add Episode / Custom Button", callback_data="add_custom_btn")],
         [InlineKeyboardButton("🇧🇩 Badge: Bangla", callback_data="bdg_bangla"),
          InlineKeyboardButton("⏭ Skip Badge", callback_data="bdg_skip")],
         [InlineKeyboardButton("✅ FINISH & POST", callback_data="proc_final")]
@@ -814,6 +823,19 @@ async def show_upload_panel(message, uid):
         await message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
     else:
         await message.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
+# 🆕 New Handler for Custom Buttons
+@bot.on_callback_query(filters.regex("^add_custom_btn"))
+async def add_custom_btn_handler(client, cb: CallbackQuery):
+    uid = cb.from_user.id
+    user_conversations[uid]["state"] = "wait_custom_btn_name"
+    await cb.message.edit_text(
+        "📝 **Enter Custom Button Name:**\n\n"
+        "Examples:\n"
+        "- `Episode 1`\n"
+        "- `Season 1 Zip`\n"
+        "- `480p [Drive]`"
+    )
 
 @bot.on_callback_query(filters.regex("^up_"))
 async def upload_request(client, cb: CallbackQuery):
@@ -944,6 +966,16 @@ async def main_conversation_handler(client, message: Message):
         convo["language"] = text
         await show_upload_panel(message, uid)
 
+    # 🆕 CUSTOM BUTTON NAME HANDLER
+    elif state == "wait_custom_btn_name":
+        convo["temp_btn_name"] = text
+        convo["current_quality"] = "custom"
+        convo["state"] = "wait_file_upload"
+        await message.reply_text(
+            f"📤 **Upload File for: '{text}'**\n"
+            "👉 Send Video/File now."
+        )
+
     # -----------------------------------------------------------
     # FILE UPLOAD & LOG CHANNEL BACKUP LOGIC (Fixed)
     # -----------------------------------------------------------
@@ -954,14 +986,18 @@ async def main_conversation_handler(client, message: Message):
         if not LOG_CHANNEL_ID:
             return await message.reply_text("❌ **System Error:** Log Channel ID is not set in `.env`.")
 
-        quality = convo["current_quality"]
+        # Determine Button Name
+        if convo["current_quality"] == "custom":
+            btn_name = convo["temp_btn_name"]
+        else:
+            btn_name = convo["current_quality"]
         
         # A. Notification
         status_msg = await message.reply_text("🔄 **Processing File...**\n1. Forwarding to Log Channel...\n2. Saving to Database...\n3. Shortening Link...")
         
         try:
             # B. Forward to Log Channel
-            log_msg = await message.copy(chat_id=LOG_CHANNEL_ID, caption=f"#BACKUP\nUser: {uid}\nQuality: {quality}")
+            log_msg = await message.copy(chat_id=LOG_CHANNEL_ID, caption=f"#BACKUP\nUser: {uid}\nItem: {btn_name}")
             
             # C. Extract IDs
             backup_file_id = log_msg.video.file_id if log_msg.video else log_msg.document.file_id
@@ -983,7 +1019,7 @@ async def main_conversation_handler(client, message: Message):
                 f"🎬 **Movie:** {title}\n"
                 f"📅 **Year:** {year}\n"
                 f"🔊 **Language:** {language}\n"
-                f"🔰 **Quality:** {quality}"
+                f"🔰 **Quality:** {btn_name}"
             )
             
             # E. Get User Timer Settings
@@ -1005,8 +1041,8 @@ async def main_conversation_handler(client, message: Message):
             deep_link = f"https://t.me/{bot_username}?start={code}"
             short_link = await shorten_link(uid, deep_link)
             
-            # H. Update Conversation
-            convo['links'][quality] = short_link
+            # H. Update Conversation (Use specific button name)
+            convo['links'][btn_name] = short_link
             
             # ✅ ERROR FIX: Using status_msg instead of message for editing
             await show_upload_panel(status_msg, uid)
@@ -1042,12 +1078,19 @@ async def process_final_post(client, cb: CallbackQuery):
         convo['links']
     )
     
-    # 2. Create Buttons
+    # 2. Create Buttons (Handle Custom Names properly)
     buttons = []
     for qual, link in convo['links'].items():
-        buttons.append([InlineKeyboardButton(f"📥 Download {qual}", url=link)])
+        # If it's a standard quality like "480p", add "Download" prefix.
+        if qual in ["480p", "720p", "1080p"]:
+            btn_text = f"📥 Download {qual}"
+        else:
+            # For custom names like "Episode 1", keep it simple or add icon
+            btn_text = f"📥 {qual}" 
+            
+        buttons.append([InlineKeyboardButton(btn_text, url=link)])
         
-    # 🆕 NEW: Add "How to Download" Button
+    # 🆕 NEW: Add "How to Download" Button at the bottom
     buttons.append([InlineKeyboardButton("ℹ️ How to Download / কিভাবে ডাউনলোড করবেন", callback_data="show_tutorial")])
     
     # 3. Process Image (Watermark + Badge)
