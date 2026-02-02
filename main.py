@@ -8,6 +8,7 @@
 # 2. Added Full Support for TMDB Links.
 # 3. Improved Search Engine (Finds movies/series more accurately).
 # 4. Fixed 'UnboundLocalError' & optimized file handling.
+# 5. Added Custom Language Support via Button & Manual Input.
 # ==============================================================================
 
 import os
@@ -648,6 +649,9 @@ async def post_search_cmd(client, message: Message):
             }
             langs = [["English", "Hindi"], ["Bengali", "Dual Audio"]]
             buttons = [[InlineKeyboardButton(l, callback_data=f"lang_{l}") for l in row] for row in langs]
+            # UPDATE: Added Custom Language Button
+            buttons.append([InlineKeyboardButton("✍️ Custom Language", callback_data="lang_custom")])
+            
             return await msg.edit_text(f"✅ Found: **{details.get('title') or details.get('name')}**\n\n🌐 **Select Language:**", reply_markup=InlineKeyboardMarkup(buttons))
         else:
             return await msg.edit_text("❌ Invalid TMDB Link.")
@@ -724,13 +728,23 @@ async def media_selected(client, cb: CallbackQuery):
     
     langs = [["English", "Hindi"], ["Bengali", "Dual Audio"]]
     buttons = [[InlineKeyboardButton(l, callback_data=f"lang_{l}") for l in row] for row in langs]
+    # UPDATE: Added Custom Language Button
+    buttons.append([InlineKeyboardButton("✍️ Custom Language", callback_data="lang_custom")])
+
     await cb.message.edit_text(f"✅ Selected: **{details.get('title') or details.get('name')}**\n\n🌐 **Select Language:**", reply_markup=InlineKeyboardMarkup(buttons))
 
 @bot.on_callback_query(filters.regex("^lang_"))
 async def language_selected(client, cb: CallbackQuery):
-    lang = cb.data.split("_")[1]
+    data = cb.data.split("_")[1]
     uid = cb.from_user.id
-    user_conversations[uid]["language"] = lang
+    
+    # UPDATE: Handle Custom Language Click
+    if data == "custom":
+        user_conversations[uid]["state"] = "wait_custom_lang"
+        await cb.message.edit_text("✍️ **Type Your Custom Language:**\n(e.g. Tamil, French, Spanish Dubbed)")
+        return
+
+    user_conversations[uid]["language"] = data
     # For Auto post, we can edit the message
     await show_upload_panel(cb.message, uid, is_edit=True)
 
@@ -886,6 +900,12 @@ async def main_conversation_handler(client, message: Message):
     elif state == "wait_lang" and convo.get("is_manual"):
         convo["language"] = text
         # Use Reply to avoid crashing
+        await show_upload_panel(message, uid, is_edit=False)
+        
+    # --- UPDATE: CUSTOM LANGUAGE HANDLER ---
+    elif state == "wait_custom_lang":
+        convo["language"] = text
+        await message.reply_text(f"✅ Language Set: **{text}**")
         await show_upload_panel(message, uid, is_edit=False)
 
     # --- BADGE & CUSTOM BUTTON ---
