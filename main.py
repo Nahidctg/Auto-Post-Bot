@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 
 # ==============================================================================
-# 🎬 ULTIMATE MOVIE BOT - PREMIUM EDITION (BATCH & REQUEST UPDATE)
+# 🎬 ULTIMATE MOVIE BOT - PREMIUM EDITION (BATCH WITH SEASON TAG UPDATE)
 # ==============================================================================
 # Update Log:
 # 1. Added Rich Caption Support for Files.
-# 2. Optimized File Storage Logic.
-# 3. Added MOVIE REQUEST SYSTEM (New).
-# 4. Added BATCH / SEASON UPLOAD MODE (New).
+# 2. MOVIE REQUEST SYSTEM.
+# 3. BATCH UPLOAD WITH OPTIONAL SEASON TAG (New).
 # ==============================================================================
 
 import os
@@ -73,7 +72,7 @@ db_client = motor.motor_asyncio.AsyncIOMotorClient(DB_URI)
 db = db_client[DB_NAME]
 users_collection = db.users
 files_collection = db.files
-requests_collection = db.requests # NEW COLLECTION FOR REQUESTS
+requests_collection = db.requests 
 
 # Global Variables
 user_conversations = {}
@@ -519,7 +518,7 @@ async def start_cmd(client, message: Message):
         
         user_buttons = [
             [InlineKeyboardButton("👤 My Account", callback_data="my_account")],
-            [InlineKeyboardButton("🙏 Request Movie", callback_data="request_movie")]  # [UPDATED] Request Button
+            [InlineKeyboardButton("🙏 Request Movie", callback_data="request_movie")]
         ]
         if not is_premium:
             user_buttons.insert(0, [InlineKeyboardButton("💎 Buy Premium Access", user_id=OWNER_ID)])
@@ -543,7 +542,6 @@ async def callback_handler(client, cb: CallbackQuery):
         help_text = "**⚙️ Commands:**\n`/setapi <key>`\n`/setwatermark <text>`\n`/settutorial <link>`\n`/addchannel <id>`"
         await cb.answer(help_text, show_alert=True)
 
-    # [UPDATED] Request Handler
     elif data == "request_movie":
         user_conversations[uid] = {"state": "waiting_for_request"}
         await cb.message.edit_text("📝 **Request System**\n\n✍️ Please type the Name of the Movie or Series you want:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_req")]]))
@@ -762,16 +760,24 @@ async def show_upload_panel(message, uid, is_edit=False):
     """Shows the panel to upload files."""
     convo = user_conversations.get(uid, {})
     is_batch = convo.get("is_batch_mode", False)
+    season_tag = convo.get("batch_season_prefix", None)
     
     # [UPDATED] Batch Mode Indicator in Button
-    batch_text = "🟢 Batch Mode: ON" if is_batch else "📦 Start Batch/Season Upload"
+    if is_batch:
+        if season_tag:
+            batch_text = f"🟢 Batch ON ({season_tag})"
+        else:
+            batch_text = "🟢 Batch Mode: ON"
+    else:
+        batch_text = "📦 Start Batch/Season Upload"
+    
     batch_callback = "toggle_batch"
     
     buttons = [
         [InlineKeyboardButton("📤 Upload 480p", callback_data="up_480p")],
         [InlineKeyboardButton("📤 Upload 720p", callback_data="up_720p")],
         [InlineKeyboardButton("📤 Upload 1080p", callback_data="up_1080p")],
-        [InlineKeyboardButton(batch_text, callback_data=batch_callback)], # New Batch Button
+        [InlineKeyboardButton(batch_text, callback_data=batch_callback)], 
         [InlineKeyboardButton("➕ Custom Button / Episode", callback_data="add_custom_btn")],
         [InlineKeyboardButton("🎨 Add Badge", callback_data="set_badge")],
         [InlineKeyboardButton("✅ FINISH & POST", callback_data="proc_final")]
@@ -783,7 +789,12 @@ async def show_upload_panel(message, uid, is_edit=False):
     status_text = "\n".join([f"✅ **{k}** Added" for k in links.keys()])
     if not status_text: status_text = "No files added yet."
     
-    mode_text = "🟢 **BATCH MODE ACTIVE**\nFiles will be auto-named (Episode 1, 2...)" if is_batch else ""
+    mode_text = ""
+    if is_batch:
+        if season_tag:
+            mode_text = f"🟢 **BATCH MODE ACTIVE**\nFiles will be named: **{season_tag} E1, {season_tag} E2...**"
+        else:
+            mode_text = "🟢 **BATCH MODE ACTIVE**\nFiles will be named: **Episode 1, Episode 2...**"
 
     text = (f"📂 **File Manager**\n{mode_text}\n\n{status_text}\n\n"
             f"🏷 **Badge:** {badge}\n\n"
@@ -794,30 +805,51 @@ async def show_upload_panel(message, uid, is_edit=False):
     else:
         await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
+# --- [UPDATED] BATCH TOGGLE WITH OPTIONAL SEASON INPUT ---
+
 @bot.on_callback_query(filters.regex("^toggle_batch"))
 async def toggle_batch_handler(client, cb: CallbackQuery):
     uid = cb.from_user.id
     convo = user_conversations.get(uid)
     if not convo: return await cb.answer("Session expired.", show_alert=True)
     
-    # Toggle boolean
-    convo["is_batch_mode"] = not convo.get("is_batch_mode", False)
-    # Reset episode counter if enabling
-    if convo["is_batch_mode"]:
-        convo["episode_count"] = 1
-        convo["current_quality"] = "batch" # Special state
-        convo["state"] = "wait_file_upload" # Go directly to upload state
-        await cb.answer("🟢 Batch Mode Enabled! Send files sequentially.", show_alert=True)
-        await cb.message.edit_text(
-            "🟢 **Batch / Season Mode Active**\n\n"
-            "👉 **Send your files one by one.**\n"
-            "Bot will auto-name them (Episode 1, Episode 2...)\n\n"
-            "⚠️ **Stop Batch Mode:** Click 'Back' when done.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Stop / Back to Panel", callback_data="back_panel")]])
-        )
-    else:
+    # If already active, turn it off
+    if convo.get("is_batch_mode", False):
+        convo["is_batch_mode"] = False
+        convo["batch_season_prefix"] = None # Reset prefix
         await cb.answer("🔴 Batch Mode Disabled.", show_alert=True)
         await show_upload_panel(cb.message, uid, is_edit=True)
+    else:
+        # Ask for Season Number (Optional)
+        convo["state"] = "wait_batch_season_input"
+        await cb.message.edit_text(
+            "📝 **Enter Season Number (Optional)**\n\n"
+            "👉 Type a prefix like `S1`, `S01` or `Season 1`.\n"
+            "Buttons will look like: **S1 E1**, **S1 E2** etc.\n\n"
+            "👇 **Click Skip** to use default (**Episode 1**).",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⏭ SKIP (Default)", callback_data="batch_skip_season")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="back_panel")]
+            ])
+        )
+
+@bot.on_callback_query(filters.regex("^batch_skip_season"))
+async def batch_skip_season_handler(client, cb: CallbackQuery):
+    uid = cb.from_user.id
+    convo = user_conversations.get(uid)
+    
+    convo["batch_season_prefix"] = None # No prefix
+    convo["is_batch_mode"] = True
+    convo["episode_count"] = 1
+    convo["current_quality"] = "batch" 
+    convo["state"] = "wait_file_upload"
+    
+    await cb.message.edit_text(
+        "🟢 **Batch Mode Active (Default)**\n\n"
+        "👉 **Send files now.**\n"
+        "Naming: **Episode 1, Episode 2...**",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Stop Batch", callback_data="back_panel")]])
+    )
 
 @bot.on_callback_query(filters.regex("^add_custom_btn"))
 async def add_custom_btn_handler(client, cb: CallbackQuery):
@@ -852,6 +884,7 @@ async def back_button(client, cb: CallbackQuery):
     if uid in user_conversations:
         # Turn off batch mode when going back
         user_conversations[uid]["is_batch_mode"] = False
+        user_conversations[uid]["batch_season_prefix"] = None
     await show_upload_panel(cb.message, uid, is_edit=True)
 
 # ==============================================================================
@@ -869,12 +902,11 @@ async def main_conversation_handler(client, message: Message):
     state = convo["state"]
     text = message.text
     
-    # --- [UPDATED] REQUEST SYSTEM LOGIC ---
+    # --- REQUEST SYSTEM LOGIC ---
     if state == "waiting_for_request":
         request_text = text
         if not request_text: return await message.reply_text("❌ Please send text only.")
         
-        # Save to DB
         req_entry = {
             "user_id": uid,
             "user_name": message.from_user.first_name,
@@ -883,7 +915,6 @@ async def main_conversation_handler(client, message: Message):
         }
         await requests_collection.insert_one(req_entry)
         
-        # Notify Log Channel
         if LOG_CHANNEL_ID:
             await client.send_message(
                 LOG_CHANNEL_ID, 
@@ -894,7 +925,7 @@ async def main_conversation_handler(client, message: Message):
         del user_conversations[uid]
         return
 
-    # --- ADMIN BROADCAST & PREMIUM ---
+    # --- ADMIN LOGIC ---
     if state == "admin_broadcast_wait":
         if uid != OWNER_ID: return
         msg = await message.reply_text("📣 **Broadcasting...**")
@@ -921,6 +952,23 @@ async def main_conversation_handler(client, message: Message):
             await message.reply_text(f"✅ Premium Removed from ID: `{text}`")
         except: await message.reply_text("❌ Invalid ID.")
         del user_conversations[uid]
+        return
+
+    # --- [UPDATED] BATCH SEASON INPUT ---
+    if state == "wait_batch_season_input":
+        prefix = text.strip()
+        convo["batch_season_prefix"] = prefix
+        convo["is_batch_mode"] = True
+        convo["episode_count"] = 1
+        convo["current_quality"] = "batch"
+        convo["state"] = "wait_file_upload"
+        
+        await message.reply_text(
+            f"🟢 **Batch Mode Active**\nPrefix: `{prefix}`\n\n"
+            f"👉 **Send files now.**\n"
+            f"Naming: **{prefix} E1, {prefix} E2...**",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Stop Batch", callback_data="back_panel")]])
+        )
         return
 
     # --- MANUAL MODE INPUTS ---
@@ -972,7 +1020,6 @@ async def main_conversation_handler(client, message: Message):
         await message.reply_text(f"✅ Language Set: **{text}**")
         await show_upload_panel(message, uid, is_edit=False)
 
-    # --- BADGE & CUSTOM BUTTON ---
     elif state == "wait_badge_text":
         convo["temp_badge_text"] = text
         await show_upload_panel(message, uid, is_edit=False)
@@ -983,7 +1030,7 @@ async def main_conversation_handler(client, message: Message):
         convo["state"] = "wait_file_upload"
         await message.reply_text(f"📤 **Upload File for: '{text}'**\n👉 Send Video/File now.")
 
-    # --- [UPDATED] FILE UPLOAD LOGIC (BATCH SUPPORT) ---
+    # --- [UPDATED] FILE UPLOAD LOGIC (BATCH WITH SEASON SUPPORT) ---
     elif state == "wait_file_upload":
         if not (message.video or message.document):
             return await message.reply_text("❌ Please send a **Video** or **Document** file.")
@@ -993,7 +1040,13 @@ async def main_conversation_handler(client, message: Message):
         
         if is_batch:
             count = convo.get("episode_count", 1)
-            btn_name = f"Episode {count}"
+            season_prefix = convo.get("batch_season_prefix", None)
+            
+            if season_prefix:
+                btn_name = f"{season_prefix} E{count}" # e.g., S1 E1
+            else:
+                btn_name = f"Episode {count}" # Default
+        
         elif convo["current_quality"] == "custom": 
             btn_name = convo["temp_btn_name"]
         else: 
@@ -1044,7 +1097,7 @@ async def main_conversation_handler(client, message: Message):
                 "code": code, 
                 "file_id": backup_file_id, 
                 "log_msg_id": log_msg.id,
-                "caption": file_caption, # Saving the detailed caption here
+                "caption": file_caption, 
                 "delete_timer": user_data.get('delete_timer', 0),
                 "uploader_id": uid, 
                 "created_at": datetime.now()
@@ -1058,11 +1111,11 @@ async def main_conversation_handler(client, message: Message):
             
             await message.delete()
             
-            # [UPDATED] BATCH LOGIC VS NORMAL LOGIC
+            # [UPDATED] BATCH LOGIC
             if is_batch:
                 convo["episode_count"] += 1
                 await status_msg.edit_text(
-                    f"✅ **{btn_name} Saved!**\n\n👇 **Send Next Episode/File...**\n(Or click Back to finish)",
+                    f"✅ **{btn_name} Saved!**\n\n👇 **Send Next Episode...**\n(Or click Stop to finish)",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Stop / Finish Batch", callback_data="back_panel")]])
                 )
             else:
@@ -1093,35 +1146,49 @@ async def process_final_post(client, cb: CallbackQuery):
     
     # 2. Buttons
     buttons = []
-    # Smart Sorting: standard qualities first, then Episodes/Others
+    # Smart Sorting: standard qualities first, then Episodes
     priority = ["480p", "720p", "1080p"]
     
     def sort_key(k):
+        # 1. Standard qualities first
         if k in priority: return priority.index(k)
-        if "Episode" in k: 
-            try: return 100 + int(re.search(r'\d+', k).group()) # Ep 1, 2, 10 sorted correctly
+        
+        # 2. Episodes with "E" + Numbers (e.g., S1 E1, Episode 5)
+        # We look for the LAST number in the string which is usually the Episode number
+        nums = re.findall(r'\d+', k)
+        if nums:
+            # If "S1 E1", nums=['1', '1']. We want the last '1' (Episode) for sorting.
+            # If "Episode 10", nums=['10'].
+            try: return 100 + int(nums[-1])
             except: return 200
         return 300
 
     sorted_keys = sorted(convo['links'].keys(), key=sort_key)
 
-    # Button Layout Logic: 
-    # If standard qualities (up to 3), single row. 
-    # If Episodes (many), create grid.
+    # Button Layout Logic
     temp_row = []
     for qual in sorted_keys:
         link = convo['links'][qual]
-        btn_text = f"📥 Download {qual}" if qual in priority else f"📥 {qual}"
         
-        if "Episode" in qual:
-            # Shorten button text for episodes like "Ep 1"
-            short_name = qual.replace("Episode", "Ep")
-            temp_row.append(InlineKeyboardButton(short_name, url=link))
+        # Label Formatting
+        btn_text = qual
+        if qual in priority:
+            btn_text = f"📥 Download {qual}"
+        elif "Episode" in qual:
+            # Shorten "Episode 1" to "Ep 1"
+            btn_text = qual.replace("Episode", "Ep")
+        
+        # Logic: Standard buttons in single rows, Episodes in Grid (3 per row)
+        if qual in priority:
+            if temp_row:
+                buttons.append(temp_row)
+                temp_row = []
+            buttons.append([InlineKeyboardButton(btn_text, url=link)])
+        else:
+            temp_row.append(InlineKeyboardButton(btn_text, url=link))
             if len(temp_row) == 3: # 3 Episodes per row
                 buttons.append(temp_row)
                 temp_row = []
-        else:
-            buttons.append([InlineKeyboardButton(btn_text, url=link)])
     
     if temp_row: buttons.append(temp_row)
         
