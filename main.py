@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 
 # ==============================================================================
-# 🎬 ULTIMATE MOVIE BOT - PREMIUM EDITION (WITH BLOGGER REDIRECT SYSTEM)
+# 🎬 ULTIMATE MOVIE BOT - PREMIUM EDITION (WITH BLOGGER REDIRECT & REPOST SYSTEM)
 # ==============================================================================
 # Update Log:
 # 1. Added Rich Caption Support for Files.
 # 2. MOVIE REQUEST SYSTEM.
 # 3. BATCH UPLOAD WITH OPTIONAL SEASON TAG.
 # 4. BLOGGER/WEBSITE REDIRECT SUPPORT (Anti-Ban Link System).
+# 5. ADD EPISODE TO OLD POST & REPOST SYSTEM.
 # ==============================================================================
 
 import os
@@ -26,7 +27,7 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
-from pyrogram.errors import UserNotParticipant, FloodWait
+from pyrogram.errors import UserNotParticipant, FloodWait, MessageNotModified
 from flask import Flask
 from dotenv import load_dotenv
 import motor.motor_asyncio
@@ -55,9 +56,6 @@ LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID"))
 # ------------------------------------------------------------------------------
 # 🌐 BLOGGER / WEBSITE REDIRECT CONFIGURATION (MIDDLEMAN SYSTEM)
 # ------------------------------------------------------------------------------
-# এখানে আপনার ব্লগের লিংক দিন (শেষে স্ল্যাশ '/' দিবেন না)
-# উদাহরণ: "https://mymoviev2.blogspot.com"
-# যদি এটি ফাঁকা রাখেন, তবে বট সাধারণ টেলিগ্রাম লিংক তৈরি করবে (যা রিস্কি)।
 BLOG_URL = os.getenv("BLOG_URL", "") 
 
 # Database Configuration
@@ -523,7 +521,7 @@ async def start_cmd(client, message: Message):
         ])
     else:
         status_text = "💎 **Premium User**" if is_premium else "👤 **Free User**"
-        welcome_text = f"👋 **Hello {user.first_name}!**\n\nYour Status: {status_text}\n\n👇 **Available Commands:**\n`/post <Name/Link>` - Auto Post (Supports IMDb/TMDB)\n`/manual` - Manual Post (Free for All)"
+        welcome_text = f"👋 **Hello {user.first_name}!**\n\nYour Status: {status_text}\n\n👇 **Available Commands:**\n`/post <Name/Link>` - Auto Post (Supports IMDb/TMDB)\n`/manual` - Manual Post (Free for All)\n`/addep <Link>` - Add Episode to Old Post"
         
         user_buttons = [
             [InlineKeyboardButton("👤 My Account", callback_data="my_account")],
@@ -897,7 +895,116 @@ async def back_button(client, cb: CallbackQuery):
     await show_upload_panel(cb.message, uid, is_edit=True)
 
 # ==============================================================================
-# 9. MAIN MESSAGE HANDLER (TEXT & FILES)
+# 9. ADD EPISODE (EDIT) & REPOST SYSTEM [NEW FEATURE]
+# ==============================================================================
+
+@bot.on_message(filters.command("addep") & filters.private)
+@force_subscribe
+@check_premium
+async def add_episode_cmd(client, message: Message):
+    if len(message.command) < 2:
+        return await message.reply_text(
+            "⚠️ **Usage:**\n`/addep <Channel_Post_Link>`\n\n"
+            "Example: `/addep https://t.me/MyMovieChannel/123`"
+        )
+    
+    post_link = message.command[1]
+    
+    # Link Parsing Logic
+    try:
+        if "/c/" in post_link: # Private Channel Link
+            parts = post_link.split("/")
+            chat_id = int("-100" + parts[-2])
+            msg_id = int(parts[-1])
+        else: # Public Channel Link
+            parts = post_link.split("/")
+            chat_id = parts[-2] # Username
+            msg_id = int(parts[-1])
+    except:
+        return await message.reply_text("❌ **Invalid Link Format!**")
+
+    # Verify if Bot can access the message
+    try:
+        target_msg = await client.get_messages(chat_id, msg_id)
+        if not target_msg or not target_msg.reply_markup:
+            return await message.reply_text("❌ **Message not found or has no buttons!**\nMake sure Bot is Admin in that channel.")
+    except Exception as e:
+        return await message.reply_text(f"❌ **Error accessing post:** {e}\n(Make sure Bot is Admin)")
+
+    # Save State
+    uid = message.from_user.id
+    user_conversations[uid] = {
+        "state": "wait_file_for_edit",
+        "edit_chat_id": chat_id,
+        "edit_msg_id": msg_id,
+        "old_markup": target_msg.reply_markup
+    }
+    
+    await message.reply_text(
+        f"✅ **Post Found!**\n🆔 Message ID: `{msg_id}`\n\n"
+        "📂 **Now send the New File (Episode/Movie):**\n"
+        "_(Bot will create a link and add it to the post)_"
+    )
+
+# --- Repost Callback Handlers ---
+
+@bot.on_callback_query(filters.regex("^repost_"))
+async def repost_handler(client, cb: CallbackQuery):
+    uid = cb.from_user.id
+    convo = user_conversations.get(uid)
+    if not convo or "repost_data" not in convo:
+        return await cb.answer("❌ Session Expired.", show_alert=True)
+    
+    data = convo["repost_data"]
+    chat_id = data["chat_id"]
+    msg_id = data["message_id"]
+    update_text = data["update_text"]
+    
+    action = cb.data
+    
+    try:
+        if action == "repost_full":
+            # Option 1: Copy the entire updated message as a NEW post
+            await client.copy_message(
+                chat_id=chat_id,
+                from_chat_id=chat_id,
+                message_id=msg_id
+            )
+            await cb.message.edit_text(f"✅ **Fresh Post Sent!**\nUsers have been notified about **{update_text}**.")
+            
+        elif action == "repost_alert":
+            # Option 2: Send a small notification linking to the main post
+            if str(chat_id).startswith("-100"):
+                clean_id = str(chat_id)[4:]
+                post_link = f"https://t.me/c/{clean_id}/{msg_id}"
+            else:
+                chat_info = await client.get_chat(chat_id)
+                post_link = f"https://t.me/{chat_info.username}/{msg_id}"
+
+            alert_text = (
+                f"🔔 **Update Alert!**\n\n"
+                f"🆕 **{update_text}** has been added!\n"
+                f"👇 Click below to watch."
+            )
+            
+            await client.send_message(
+                chat_id=chat_id,
+                text=alert_text,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎬 Watch Now", url=post_link)]
+                ])
+            )
+            await cb.message.edit_text(f"✅ **Alert Sent!**\nNotification sent for **{update_text}**.")
+            
+    except Exception as e:
+        await cb.message.edit_text(f"❌ **Failed to Repost:** {e}")
+    
+    # Clean up
+    if uid in user_conversations:
+        del user_conversations[uid]
+
+# ==============================================================================
+# 10. MAIN MESSAGE HANDLER (TEXT & FILES) - INCLUDES EDIT LOGIC
 # ==============================================================================
 
 @bot.on_message(filters.private & (filters.text | filters.video | filters.document | filters.photo))
@@ -1039,6 +1146,95 @@ async def main_conversation_handler(client, message: Message):
         convo["state"] = "wait_file_upload"
         await message.reply_text(f"📤 **Upload File for: '{text}'**\n👉 Send Video/File now.")
 
+    # --- [NEW] EDIT POST FILE UPLOAD ---
+    elif state == "wait_file_for_edit":
+        if not (message.video or message.document):
+            return await message.reply_text("❌ Please send a **Video** or **Document** file.")
+        
+        btn_msg = await message.reply_text(
+            "📝 **File Received!**\n\n👉 **Enter Button Name:**\n(e.g. `Episode 2`, `1080p Link`)"
+        )
+        convo["state"] = "wait_btn_name_for_edit"
+        convo["pending_file_msg"] = message # Store file message temporarily
+        return
+
+    # --- [NEW] EDIT POST FINAL STEP ---
+    elif state == "wait_btn_name_for_edit":
+        button_name = text
+        chat_id = convo["edit_chat_id"]
+        msg_id = convo["edit_msg_id"]
+        old_markup = convo["old_markup"]
+        file_msg = convo["pending_file_msg"]
+        
+        status_msg = await message.reply_text("🔄 **Processing & Updating Channel Post...**")
+        
+        try:
+            # 1. Forward to Log
+            log_msg = await file_msg.copy(chat_id=LOG_CHANNEL_ID, caption=f"#UPDATE_POST\nUser: {uid}\nItem: {button_name}")
+            backup_file_id = log_msg.video.file_id if log_msg.video else log_msg.document.file_id
+            
+            # 2. DB Save
+            code = generate_random_code()
+            user_data = await users_collection.find_one({'_id': uid})
+            file_caption = f"🎬 **{button_name}**\n━━━━━━━━━━━━━━\n🤖 @{await get_bot_username()}"
+            
+            await files_collection.insert_one({
+                "code": code, "file_id": backup_file_id, "log_msg_id": log_msg.id,
+                "caption": file_caption, "delete_timer": user_data.get('delete_timer', 0),
+                "uploader_id": uid, "created_at": datetime.now()
+            })
+            
+            # 3. Link Gen
+            bot_uname = await get_bot_username()
+            if BLOG_URL and "http" in BLOG_URL:
+                base_blog = BLOG_URL.rstrip("/")
+                final_long_url = f"{base_blog}/?code={code}"
+            else:
+                final_long_url = f"https://t.me/{bot_uname}?start={code}"
+            
+            short_link = await shorten_link(uid, final_long_url)
+            
+            # 4. Update Keyboard
+            new_button = InlineKeyboardButton(button_name, url=short_link)
+            current_keyboard = old_markup.inline_keyboard if old_markup else []
+            
+            # Add logic (Row limit 3 for episodes)
+            if current_keyboard and len(current_keyboard[-1]) < 3 and "Episode" in button_name:
+                current_keyboard[-1].append(new_button)
+            else:
+                current_keyboard.append([new_button])
+                
+            # 5. Edit Message
+            await client.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=InlineKeyboardMarkup(current_keyboard)
+            )
+            
+            # 6. ASK REPOST
+            convo["repost_data"] = {
+                "chat_id": chat_id,
+                "message_id": msg_id,
+                "update_text": button_name
+            }
+            
+            await status_msg.edit_text(
+                f"✅ **Successfully Added: {button_name}**\n"
+                f"The old post has been updated.\n\n"
+                f"🚀 **Do you want to Repost to Channel?**\n"
+                f"(So users get a notification)",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🚀 Repost Full Post (Fresh)", callback_data="repost_full")],
+                    [InlineKeyboardButton("🔔 Send Update Alert Only", callback_data="repost_alert")],
+                    [InlineKeyboardButton("❌ Done (No Post)", callback_data="close_post")]
+                ])
+            )
+            
+        except Exception as e:
+            logger.error(f"Edit Post Error: {e}")
+            await status_msg.edit_text(f"❌ **Error:** {str(e)}")
+        return
+
     # --- [UPDATED] FILE UPLOAD LOGIC (BATCH WITH SEASON SUPPORT & BLOGGER REDIRECT) ---
     elif state == "wait_file_upload":
         if not (message.video or message.document):
@@ -1145,7 +1341,7 @@ async def main_conversation_handler(client, message: Message):
             await status_msg.edit_text(f"❌ **Error:** {str(e)}")
 
 # ==============================================================================
-# 10. FINAL POST PROCESSING
+# 11. FINAL POST PROCESSING
 # ==============================================================================
 
 @bot.on_callback_query(filters.regex("^proc_final"))
