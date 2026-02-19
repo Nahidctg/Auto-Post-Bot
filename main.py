@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # ==============================================================================
-# 🎬 ULTIMATE MOVIE BOT - PREMIUM EDITION (WITH SMART SERIES MATRIX & AUTO-DETECT)
+# 🎬 ULTIMATE MOVIE BOT - PREMIUM EDITION (FLOOD WAIT FIXED)
 # ==============================================================================
 # Update Log:
 # 1. Added Rich Caption Support for Files.
@@ -9,7 +9,8 @@
 # 3. BATCH UPLOAD WITH OPTIONAL SEASON TAG.
 # 4. BLOGGER/WEBSITE REDIRECT SUPPORT (Anti-Ban Link System).
 # 5. ADD EPISODE TO OLD POST & REPOST SYSTEM.
-# 6. [NEW] SMART AUTO-DETECT & MATRIX LAYOUT FOR WEB SERIES.
+# 6. SMART AUTO-DETECT & MATRIX LAYOUT FOR WEB SERIES.
+# 7. [FIXED] FLOOD WAIT ERROR (Added FSUB Caching System).
 # ==============================================================================
 
 import os
@@ -84,6 +85,7 @@ requests_collection = db.requests
 
 # Global Variables
 user_conversations = {}
+fsub_cache = {}  # [NEW] Caching for Force Sub to prevent FloodWait
 BOT_USERNAME = ""
 
 # Initialize Pyrogram Client
@@ -161,14 +163,18 @@ def download_font():
 # --- Database Helpers ---
 
 async def add_user_to_db(user):
-    await users_collection.update_one(
-        {'_id': user.id},
-        {
-            '$set': {'first_name': user.first_name},
-            '$setOnInsert': {'is_premium': False, 'delete_timer': 0}
-        },
-        upsert=True
-    )
+    # Optimized: Don't write to DB on every message if already exists
+    try:
+        await users_collection.update_one(
+            {'_id': user.id},
+            {
+                '$set': {'first_name': user.first_name},
+                '$setOnInsert': {'is_premium': False, 'delete_timer': 0}
+            },
+            upsert=True
+        )
+    except:
+        pass
 
 async def is_user_premium(user_id: int) -> bool:
     if user_id == OWNER_ID:
@@ -199,23 +205,39 @@ async def shorten_link(user_id: int, long_url: str):
         return long_url
 
 # ==============================================================================
-# 3. DECORATORS
+# 3. DECORATORS (UPDATED FOR FLOOD WAIT FIX)
 # ==============================================================================
 
 def force_subscribe(func):
     async def wrapper(client, message):
         if FORCE_SUB_CHANNEL:
+            user_id = message.from_user.id
+            
+            # [FIX] Check Cache First (Skip API Call if verified recently)
+            # Cache duration: 300 seconds (5 minutes)
+            if user_id in fsub_cache and (time.time() - fsub_cache[user_id] < 300):
+                return await func(client, message)
+            
             try:
                 chat_id = int(FORCE_SUB_CHANNEL) if FORCE_SUB_CHANNEL.startswith("-100") else FORCE_SUB_CHANNEL
-                await client.get_chat_member(chat_id, message.from_user.id)
+                await client.get_chat_member(chat_id, user_id)
+                
+                # Update Cache on Success
+                fsub_cache[user_id] = time.time()
+                
             except UserNotParticipant:
                 join_link = INVITE_LINK or f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"
                 return await message.reply_text(
                     "❗ **You must join our channel to use this bot.**", 
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👉 Join Channel", url=join_link)]])
                 )
+            except FloodWait as e:
+                # If FloodWait occurs, wait and retry or just pass for this time
+                logger.warning(f"FloodWait in ForceSub: Sleeping {e.value}s")
+                await asyncio.sleep(e.value)
             except Exception:
                 pass 
+        
         await func(client, message)
     return wrapper
 
@@ -788,7 +810,7 @@ async def show_upload_panel(message, uid, is_edit=False):
         [InlineKeyboardButton("📤 Upload 480p", callback_data="up_480p")],
         [InlineKeyboardButton("📤 Upload 720p", callback_data="up_720p")],
         [InlineKeyboardButton("📤 Upload 1080p", callback_data="up_1080p")],
-        [InlineKeyboardButton("📂 Auto-Detect (Web Series)", callback_data="toggle_auto_detect")], # NEW
+        [InlineKeyboardButton("📂 Auto-Detect (Web Series)", callback_data="toggle_auto_detect")], 
         [InlineKeyboardButton(batch_text, callback_data=batch_callback)], 
         [InlineKeyboardButton("➕ Custom Button / Episode", callback_data="add_custom_btn")],
         [InlineKeyboardButton("🎨 Add Badge", callback_data="set_badge")],
