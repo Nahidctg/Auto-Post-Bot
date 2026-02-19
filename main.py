@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # ==============================================================================
-# 🎬 ULTIMATE MOVIE BOT - PREMIUM EDITION (WITH BLOGGER REDIRECT & REPOST SYSTEM)
+# 🎬 ULTIMATE MOVIE BOT - PREMIUM EDITION (WITH SMART SERIES MATRIX & AUTO-DETECT)
 # ==============================================================================
 # Update Log:
 # 1. Added Rich Caption Support for Files.
@@ -9,6 +9,7 @@
 # 3. BATCH UPLOAD WITH OPTIONAL SEASON TAG.
 # 4. BLOGGER/WEBSITE REDIRECT SUPPORT (Anti-Ban Link System).
 # 5. ADD EPISODE TO OLD POST & REPOST SYSTEM.
+# 6. [NEW] SMART AUTO-DETECT & MATRIX LAYOUT FOR WEB SERIES.
 # ==============================================================================
 
 import os
@@ -767,10 +768,13 @@ async def show_upload_panel(message, uid, is_edit=False):
     """Shows the panel to upload files."""
     convo = user_conversations.get(uid, {})
     is_batch = convo.get("is_batch_mode", False)
+    is_auto = convo.get("is_auto_detect", False)
     season_tag = convo.get("batch_season_prefix", None)
     
-    # [UPDATED] Batch Mode Indicator in Button
-    if is_batch:
+    # [UPDATED] Batch Mode Indicators
+    if is_auto:
+        batch_text = "🟢 Auto-Detect Mode: ON (File Name)"
+    elif is_batch:
         if season_tag:
             batch_text = f"🟢 Batch ON ({season_tag})"
         else:
@@ -784,6 +788,7 @@ async def show_upload_panel(message, uid, is_edit=False):
         [InlineKeyboardButton("📤 Upload 480p", callback_data="up_480p")],
         [InlineKeyboardButton("📤 Upload 720p", callback_data="up_720p")],
         [InlineKeyboardButton("📤 Upload 1080p", callback_data="up_1080p")],
+        [InlineKeyboardButton("📂 Auto-Detect (Web Series)", callback_data="toggle_auto_detect")], # NEW
         [InlineKeyboardButton(batch_text, callback_data=batch_callback)], 
         [InlineKeyboardButton("➕ Custom Button / Episode", callback_data="add_custom_btn")],
         [InlineKeyboardButton("🎨 Add Badge", callback_data="set_badge")],
@@ -793,11 +798,24 @@ async def show_upload_panel(message, uid, is_edit=False):
     links = convo.get('links', {})
     badge = convo.get('temp_badge_text', 'None')
     
-    status_text = "\n".join([f"✅ **{k}** Added" for k in links.keys()])
+    # Clean up status text for Matrix keys
+    display_links = []
+    for k in links.keys():
+        if "Series__" in k:
+            parts = k.split("__")
+            # Series__S1_E5__720p -> S1 E5 [720p]
+            display = f"{parts[1].replace('_', ' ')} [{parts[2]}]"
+            display_links.append(display)
+        else:
+            display_links.append(k)
+            
+    status_text = "\n".join([f"✅ **{k}** Added" for k in display_links[-10:]]) # Show last 10
     if not status_text: status_text = "No files added yet."
     
     mode_text = ""
-    if is_batch:
+    if is_auto:
+        mode_text = "🟢 **AUTO-DETECT MODE ACTIVE**\n👉 Send many files at once.\nBot will detect S01E01 and Quality from Filename."
+    elif is_batch:
         if season_tag:
             mode_text = f"🟢 **BATCH MODE ACTIVE**\nFiles will be named: **{season_tag} E1, {season_tag} E2...**"
         else:
@@ -813,6 +831,30 @@ async def show_upload_panel(message, uid, is_edit=False):
         await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
 # --- [UPDATED] BATCH TOGGLE WITH OPTIONAL SEASON INPUT ---
+
+@bot.on_callback_query(filters.regex("^toggle_auto_detect"))
+async def toggle_auto_detect_handler(client, cb: CallbackQuery):
+    uid = cb.from_user.id
+    convo = user_conversations.get(uid)
+    if not convo: return await cb.answer("Session expired.", show_alert=True)
+
+    if convo.get("is_auto_detect", False):
+        convo["is_auto_detect"] = False
+        convo["current_quality"] = None
+        await cb.answer("🔴 Auto-Detect Disabled.", show_alert=True)
+        await show_upload_panel(cb.message, uid, is_edit=True)
+    else:
+        convo["is_auto_detect"] = True
+        convo["is_batch_mode"] = False # Disable manual batch
+        convo["current_quality"] = "auto_detect"
+        convo["state"] = "wait_file_upload"
+        
+        await cb.message.edit_text(
+            "🟢 **Auto-Detect Mode Active**\n\n"
+            "👉 **Send ALL your files now (480p, 720p, 1080p Mixed).**\n"
+            "🤖 Bot will read filename (e.g. `S01E05`) and organize them automatically into a Matrix.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Panel", callback_data="back_panel")]])
+        )
 
 @bot.on_callback_query(filters.regex("^toggle_batch"))
 async def toggle_batch_handler(client, cb: CallbackQuery):
@@ -847,6 +889,7 @@ async def batch_skip_season_handler(client, cb: CallbackQuery):
     
     convo["batch_season_prefix"] = None # No prefix
     convo["is_batch_mode"] = True
+    convo["is_auto_detect"] = False # Disable auto
     convo["episode_count"] = 1
     convo["current_quality"] = "batch" 
     convo["state"] = "wait_file_upload"
@@ -891,6 +934,7 @@ async def back_button(client, cb: CallbackQuery):
     if uid in user_conversations:
         # Turn off batch mode when going back
         user_conversations[uid]["is_batch_mode"] = False
+        user_conversations[uid]["is_auto_detect"] = False
         user_conversations[uid]["batch_season_prefix"] = None
     await show_upload_panel(cb.message, uid, is_edit=True)
 
@@ -1246,8 +1290,33 @@ async def main_conversation_handler(client, message: Message):
         
         # Determine Button Name
         is_batch = convo.get("is_batch_mode", False)
+        is_auto = convo.get("is_auto_detect", False)
         
-        if is_batch:
+        btn_name = ""
+        
+        if is_auto:
+            # === AUTO DETECT LOGIC ===
+            file_name = message.video.file_name if message.video else message.document.file_name
+            if not file_name: file_name = message.caption or "Unknown"
+            
+            # 1. Regex for Episode
+            ep_match = re.search(r"[Ee](\d+)", file_name)
+            s_match = re.search(r"[Ss](\d+)", file_name)
+            
+            # 2. Regex for Quality
+            q_match = re.search(r"(480p|720p|1080p|2160p)", file_name)
+            
+            ep_num = int(ep_match.group(1)) if ep_match else 0
+            s_num = int(s_match.group(1)) if s_match else 1
+            quality = q_match.group(1) if q_match else "HD"
+            
+            # Special Key for Matrix Sorting: Series__S1_E5__720p
+            if ep_num > 0:
+                btn_name = f"Series__S{s_num}_E{ep_num}__{quality}"
+            else:
+                btn_name = file_name[:20] # Fallback
+                
+        elif is_batch:
             count = convo.get("episode_count", 1)
             season_prefix = convo.get("batch_season_prefix", None)
             
@@ -1261,7 +1330,7 @@ async def main_conversation_handler(client, message: Message):
         else: 
             btn_name = convo["current_quality"]
         
-        status_msg = await message.reply_text(f"🔄 **Processing '{btn_name}'...**")
+        status_msg = await message.reply_text(f"🔄 **Processing...**")
         
         try:
             # 1. Forward to Log Channel
@@ -1289,9 +1358,11 @@ async def main_conversation_handler(client, message: Message):
                 genre_str = "N/A"
 
             # Rich Caption Template
+            display_name = btn_name.replace("Series__", "").replace("__", " ") if "Series__" in btn_name else btn_name
+            
             file_caption = (
                 f"🎬 **{title} ({year})**\n"
-                f"🔰 **Quality:** {btn_name}\n"
+                f"🔰 **Quality:** {display_name}\n"
                 f"🔊 **Language:** {lang}\n"
                 f"🎭 **Genre:** {genre_str}\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
@@ -1337,6 +1408,11 @@ async def main_conversation_handler(client, message: Message):
                     f"✅ **{btn_name} Saved!**\n\n👇 **Send Next Episode...**\n(Or click Stop to finish)",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Stop / Finish Batch", callback_data="back_panel")]])
                 )
+            elif is_auto:
+                 await status_msg.edit_text(
+                    f"✅ **Detected:** {display_name}\n\n👇 **Send Next File...**",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ DONE", callback_data="proc_final")]])
+                )
             else:
                 await show_upload_panel(status_msg, uid, is_edit=False)
             
@@ -1345,7 +1421,7 @@ async def main_conversation_handler(client, message: Message):
             await status_msg.edit_text(f"❌ **Error:** {str(e)}")
 
 # ==============================================================================
-# 11. FINAL POST PROCESSING
+# 11. FINAL POST PROCESSING (MATRIX LAYOUT UPDATE)
 # ==============================================================================
 
 @bot.on_callback_query(filters.regex("^proc_final"))
@@ -1363,54 +1439,74 @@ async def process_final_post(client, cb: CallbackQuery):
         convo['details'], convo.get('language', 'Unknown'), convo['links'], is_manual=convo.get("is_manual", False)
     )
     
-    # 2. Buttons
+    # 2. Buttons (NEW MATRIX LOGIC)
     buttons = []
-    # Smart Sorting: standard qualities first, then Episodes
-    priority = ["480p", "720p", "1080p"]
     
-    def sort_key(k):
-        # 1. Standard qualities first
-        if k in priority: return priority.index(k)
-        
-        # 2. Episodes with "E" + Numbers (e.g., S1 E1, Episode 5)
-        # We look for the LAST number in the string which is usually the Episode number
-        nums = re.findall(r'\d+', k)
-        if nums:
-            # If "S1 E1", nums=['1', '1']. We want the last '1' (Episode) for sorting.
-            # If "Episode 10", nums=['10'].
-            try: return 100 + int(nums[-1])
-            except: return 200
-        return 300
+    # Separation of Series Links (Auto-Detect) vs Standard Links
+    series_links = {}
+    standard_links = {}
+    
+    for k, v in convo['links'].items():
+        if "Series__" in k:
+            # Parse Key: Series__S1_E5__720p
+            parts = k.split("__")
+            s_num = parts[1] # S1
+            ep_num = int(parts[2].replace("E", "")) # 5
+            qual = parts[3] # 720p
+            
+            if ep_num not in series_links: series_links[ep_num] = {}
+            series_links[ep_num][qual] = v
+        else:
+            standard_links[k] = v
 
-    sorted_keys = sorted(convo['links'].keys(), key=sort_key)
-
-    # Button Layout Logic
+    # -- A. Handle Standard Links (Movies/Manual Batch) --
+    priority = ["480p", "720p", "1080p"]
     temp_row = []
-    for qual in sorted_keys:
-        link = convo['links'][qual]
-        
-        # Label Formatting
+    
+    # Sorting logic for standard files
+    def std_sort_key(k):
+        if k in priority: return priority.index(k)
+        nums = re.findall(r'\d+', k)
+        if nums: return 100 + int(nums[-1])
+        return 300
+    
+    for qual in sorted(standard_links.keys(), key=std_sort_key):
+        link = standard_links[qual]
         btn_text = qual
-        if qual in priority:
-            btn_text = f"📥 Download {qual}"
-        elif "Episode" in qual:
-            # Shorten "Episode 1" to "Ep 1"
-            btn_text = qual.replace("Episode", "Ep")
+        if qual in priority: btn_text = f"📥 Download {qual}"
+        elif "Episode" in qual: btn_text = qual.replace("Episode", "Ep")
         
-        # Logic: Standard buttons in single rows, Episodes in Grid (3 per row)
         if qual in priority:
-            if temp_row:
-                buttons.append(temp_row)
-                temp_row = []
+            if temp_row: buttons.append(temp_row); temp_row = []
             buttons.append([InlineKeyboardButton(btn_text, url=link)])
         else:
             temp_row.append(InlineKeyboardButton(btn_text, url=link))
-            if len(temp_row) == 3: # 3 Episodes per row
-                buttons.append(temp_row)
-                temp_row = []
+            if len(temp_row) == 3: buttons.append(temp_row); temp_row = []
     
     if temp_row: buttons.append(temp_row)
-        
+    
+    # -- B. Handle Series Links (Matrix Layout) --
+    if series_links:
+        # Sort by Episode Number
+        for ep in sorted(series_links.keys()):
+            row = []
+            # Label Button (No Action)
+            row.append(InlineKeyboardButton(f"🎬 Ep {ep}", callback_data="ignore"))
+            
+            quals = series_links[ep]
+            # Check for qualities and add buttons
+            if "480p" in quals: row.append(InlineKeyboardButton("480p", url=quals["480p"]))
+            if "720p" in quals: row.append(InlineKeyboardButton("720p", url=quals["720p"]))
+            if "1080p" in quals: row.append(InlineKeyboardButton("1080p", url=quals["1080p"]))
+            
+            # Handle other qualities (like 2160p or Unknown) if they exist
+            for q, l in quals.items():
+                if q not in ["480p", "720p", "1080p"]:
+                    row.append(InlineKeyboardButton(q, url=l))
+            
+            buttons.append(row)
+            
+    # Add Tutorial Button
     user_data = await users_collection.find_one({'_id': uid})
     if user_data.get('tutorial_url'):
         buttons.append([InlineKeyboardButton("ℹ️ How to Download", url=user_data['tutorial_url'])])
