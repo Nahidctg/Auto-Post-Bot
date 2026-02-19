@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 
 # ==============================================================================
-# 🎬 ULTIMATE MOVIE BOT - PREMIUM EDITION (FULL DETAILED VERSION)
+# 🎬 ULTIMATE MOVIE BOT - PREMIUM EDITION (FULL RESTORED + FOLDER SYSTEM)
 # ==============================================================================
-# Update Log:
-# 1. Added Rich Caption Support for Files.
-# 2. MOVIE REQUEST SYSTEM (Full).
-# 3. ADMIN PANEL & BROADCAST (Full).
-# 4. FOLDER SYSTEM: One Button = Multiple Files/Qualities.
-# 5. SMART AUTO-DETECT & MATRIX LAYOUT.
-# 6. FLOOD WAIT FIX & FAST IMAGE PROCESSING.
+# Features Included:
+# 1. Folder System: One Link = Multiple Files (480p, 720p, 1080p).
+# 2. Smart Auto-Detect: Automatically groups episodes from filenames.
+# 3. Fast Image Processing: Generates posters in 1 second (No Face Detect).
+# 4. FloodWait Fix: Cached Subscription Check to prevent ban.
+# 5. Full Admin Panel: Broadcast, Stats, Add/Remove Premium.
+# 6. Full User Settings: Watermark, API, Channels, Tutorial.
+# 7. Manual & Auto Post Systems.
 # ==============================================================================
 
 import os
@@ -32,6 +33,7 @@ from pyrogram.errors import UserNotParticipant, FloodWait, MessageNotModified
 from flask import Flask
 from dotenv import load_dotenv
 import motor.motor_asyncio
+import numpy as np
 
 # ==============================================================================
 # 1. CONFIGURATION AND SETUP
@@ -127,7 +129,7 @@ async def auto_delete_message(client, chat_id, message_ids, delay_seconds):
     if delay_seconds > 0:
         await asyncio.sleep(delay_seconds)
         try:
-            # Check if it's a list of messages or single
+            # Handle both single ID and list of IDs
             if isinstance(message_ids, list):
                 await client.delete_messages(chat_id, message_ids)
             else:
@@ -208,6 +210,8 @@ def force_subscribe(func):
             try:
                 chat_id = int(FORCE_SUB_CHANNEL) if FORCE_SUB_CHANNEL.startswith("-100") else FORCE_SUB_CHANNEL
                 await client.get_chat_member(chat_id, user_id)
+                
+                # Update Cache on Success
                 fsub_cache[user_id] = time.time()
                 
             except UserNotParticipant:
@@ -217,6 +221,7 @@ def force_subscribe(func):
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👉 Join Channel", url=join_link)]])
                 )
             except FloodWait as e:
+                # If FloodWait occurs, just log and sleep, don't crash
                 logger.warning(f"FloodWait in ForceSub: Sleeping {e.value}s")
                 await asyncio.sleep(e.value)
             except Exception:
@@ -274,6 +279,7 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
         
         # ---- FAST BADGE LOGIC (Top Right Corner) ----
         if badge_text:
+            # Dynamic Font Size based on image width
             badge_font_size = int(width * 0.08) 
             font_path = download_font()
             try:
@@ -281,30 +287,37 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
             except:
                 badge_font = ImageFont.load_default()
 
+            # Calculate Text Size
             bbox = draw.textbbox((0, 0), badge_text, font=badge_font)
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
             
+            # Padding & Position
             padding = int(badge_font_size * 0.4)
+            # Position: Top Right with margin
             x = width - text_width - (padding * 3)
             y = height * 0.04 
             
-            box_x1 = x - padding; box_y1 = y - padding
-            box_x2 = x + text_width + padding; box_y2 = y + text_height + padding
+            # Draw Background Box (Semi-Transparent Black)
+            box_x1 = x - padding
+            box_y1 = y - padding
+            box_x2 = x + text_width + padding
+            box_y2 = y + text_height + padding
             
             overlay = Image.new('RGBA', img.size, (0,0,0,0))
             overlay_draw = ImageDraw.Draw(overlay)
-            overlay_draw.rectangle((box_x1, box_y1, box_x2, box_y2), fill=(0, 0, 0, 180)) 
+            overlay_draw.rectangle((box_x1, box_y1, box_x2, box_y2), fill=(0, 0, 0, 180)) # Darker background
             
+            # Combine Overlay
             img = Image.alpha_composite(img, overlay)
-            draw = ImageDraw.Draw(img) 
+            draw = ImageDraw.Draw(img) # Re-initialize draw
             
-            # Gold Color Text
-            draw.text((x, y), badge_text, font=badge_font, fill=(255, 215, 0, 255)) 
+            # Draw Text (Golden/Yellow Color)
+            draw.text((x, y), badge_text, font=badge_font, fill=(255, 215, 0, 255)) # Gold color
 
         # ---- WATERMARK LOGIC (Bottom Center) ----
         if watermark_text:
-            font_size = int(width / 15) 
+            font_size = int(width / 15) # Smaller font for watermark
             try:
                 font = ImageFont.truetype(download_font(), font_size)
             except:
@@ -316,12 +329,14 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
             wx = (width - text_width) / 2
             wy = height - bbox[3] - (height * 0.05)
             
+            # Shadow (Black)
             draw.text((wx + 2, wy + 2), watermark_text, font=font, fill=(0, 0, 0, 150))
+            # Text (White)
             draw.text((wx, wy), watermark_text, font=font, fill=(255, 255, 255, 220))
             
         buffer = io.BytesIO()
         buffer.name = "poster.png"
-        img.convert("RGB").save(buffer, "PNG", optimize=True)
+        img.convert("RGB").save(buffer, "PNG", optimize=True) # Optimized Save
         buffer.seek(0)
         return buffer, None
 
@@ -430,11 +445,11 @@ async def start_cmd(client, message: Message):
     uid = user.id
     await add_user_to_db(user)
     
-    # --- FOLDER RETRIEVAL SYSTEM (MODIFIED) ---
+    # --- FOLDER RETRIEVAL SYSTEM (MODIFIED FOR ONE LINK -> MULTI FILES) ---
     if len(message.command) > 1:
         code = message.command[1]
         
-        # Find ALL files with this code (One Code = Multiple Files)
+        # Find ALL files matching the code (Batch/Folder Logic)
         cursor = files_collection.find({"code": code})
         files = await cursor.to_list(length=None)
         
@@ -853,29 +868,35 @@ async def back_button(client, cb: CallbackQuery):
 @check_premium
 async def add_episode_cmd(client, message: Message):
     if len(message.command) < 2:
-        return await message.reply_text("⚠️ **Usage:**\n`/addep <Channel_Post_Link>`")
+        return await message.reply_text(
+            "⚠️ **Usage:**\n`/addep <Channel_Post_Link>`\n\n"
+            "Example: `/addep https://t.me/MyMovieChannel/123`"
+        )
     
     post_link = message.command[1]
     
+    # Link Parsing Logic
     try:
-        if "/c/" in post_link: # Private
+        if "/c/" in post_link: # Private Channel Link
             parts = post_link.split("/")
             chat_id = int("-100" + parts[-2])
             msg_id = int(parts[-1])
-        else: # Public
+        else: # Public Channel Link
             parts = post_link.split("/")
-            chat_id = parts[-2]
+            chat_id = parts[-2] # Username
             msg_id = int(parts[-1])
     except:
         return await message.reply_text("❌ **Invalid Link Format!**")
 
+    # Verify if Bot can access the message
     try:
         target_msg = await client.get_messages(chat_id, msg_id)
         if not target_msg or not target_msg.reply_markup:
-            return await message.reply_text("❌ **Message not found or has no buttons!**")
+            return await message.reply_text("❌ **Message not found or has no buttons!**\nMake sure Bot is Admin in that channel.")
     except Exception as e:
-        return await message.reply_text(f"❌ **Error accessing post:** {e}")
+        return await message.reply_text(f"❌ **Error accessing post:** {e}\n(Make sure Bot is Admin)")
 
+    # Save State
     uid = message.from_user.id
     user_conversations[uid] = {
         "state": "wait_file_for_edit",
@@ -884,7 +905,13 @@ async def add_episode_cmd(client, message: Message):
         "old_markup": target_msg.reply_markup
     }
     
-    await message.reply_text("✅ **Post Found!**\n📂 **Send the New File:**")
+    await message.reply_text(
+        f"✅ **Post Found!**\n🆔 Message ID: `{msg_id}`\n\n"
+        "📂 **Now send the New File (Episode/Movie):**\n"
+        "_(Bot will create a link and add it to the post)_"
+    )
+
+# --- Repost Callback Handlers ---
 
 @bot.on_callback_query(filters.regex("^repost_"))
 async def repost_handler(client, cb: CallbackQuery):
@@ -902,11 +929,20 @@ async def repost_handler(client, cb: CallbackQuery):
     
     try:
         if action == "repost_full":
+            # 1. আগে আপডেট হওয়া মেসেজটি (বাটনসহ) নিয়ে আসা
             updated_msg = await client.get_messages(chat_id, msg_id)
-            await client.copy_message(chat_id=chat_id, from_chat_id=chat_id, message_id=msg_id, reply_markup=updated_msg.reply_markup)
-            await cb.message.edit_text(f"✅ **Fresh Post Sent!**")
+            
+            # 2. মেসেজটি কপি করা (বাটনগুলো স্পষ্টভাবে উল্লেখ করে)
+            await client.copy_message(
+                chat_id=chat_id,
+                from_chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=updated_msg.reply_markup  # <--- এই লাইনটি বাটন কপি করা নিশ্চিত করে
+            )
+            await cb.message.edit_text(f"✅ **Fresh Post Sent!**\nUsers have been notified about **{update_text}**.")
             
         elif action == "repost_alert":
+            # Option 2: Send a small notification linking to the main post
             if str(chat_id).startswith("-100"):
                 clean_id = str(chat_id)[4:]
                 post_link = f"https://t.me/c/{clean_id}/{msg_id}"
@@ -914,18 +950,30 @@ async def repost_handler(client, cb: CallbackQuery):
                 chat_info = await client.get_chat(chat_id)
                 post_link = f"https://t.me/{chat_info.username}/{msg_id}"
 
-            alert_text = f"🔔 **Update Alert!**\n\n🆕 **{update_text}** has been added!\n👇 Click below to watch."
-            await client.send_message(chat_id=chat_id, text=alert_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎬 Watch Now", url=post_link)]]))
-            await cb.message.edit_text(f"✅ **Alert Sent!**")
+            alert_text = (
+                f"🔔 **Update Alert!**\n\n"
+                f"🆕 **{update_text}** has been added!\n"
+                f"👇 Click below to watch."
+            )
+            
+            await client.send_message(
+                chat_id=chat_id,
+                text=alert_text,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎬 Watch Now", url=post_link)]
+                ])
+            )
+            await cb.message.edit_text(f"✅ **Alert Sent!**\nNotification sent for **{update_text}**.")
             
     except Exception as e:
+        logger.error(f"Repost Error: {e}")
         await cb.message.edit_text(f"❌ **Failed to Repost:** {e}")
     
+    # Clean up
     if uid in user_conversations:
         del user_conversations[uid]
-
 # ==============================================================================
-# 10. MAIN MESSAGE HANDLER (TEXT & FILES)
+# 10. MAIN MESSAGE HANDLER (TEXT & FILES) - INCLUDES EDIT LOGIC
 # ==============================================================================
 
 @bot.on_message(filters.private & (filters.text | filters.video | filters.document | filters.photo))
@@ -939,18 +987,30 @@ async def main_conversation_handler(client, message: Message):
     state = convo["state"]
     text = message.text
     
-    # --- REQUEST SYSTEM ---
+    # --- REQUEST SYSTEM LOGIC ---
     if state == "waiting_for_request":
         request_text = text
         if not request_text: return await message.reply_text("❌ Please send text only.")
-        await requests_collection.insert_one({"uid": uid, "req": request_text, "date": datetime.now()})
+        
+        req_entry = {
+            "user_id": uid,
+            "user_name": message.from_user.first_name,
+            "request": request_text,
+            "date": datetime.now()
+        }
+        await requests_collection.insert_one(req_entry)
+        
         if LOG_CHANNEL_ID:
-            await client.send_message(LOG_CHANNEL_ID, f"📨 **New Request!**\n👤 {message.from_user.mention}\n📝 `{request_text}`")
-        await message.reply_text("✅ **Submitted!**")
+            await client.send_message(
+                LOG_CHANNEL_ID, 
+                f"📨 **New Request!**\n👤 User: {message.from_user.mention}\n📝 Request: `{request_text}`"
+            )
+            
+        await message.reply_text("✅ **Your Request has been submitted to Admins!**")
         del user_conversations[uid]
         return
 
-    # --- ADMIN BROADCAST ---
+    # --- ADMIN LOGIC ---
     if state == "admin_broadcast_wait":
         if uid != OWNER_ID: return
         msg = await message.reply_text("📣 **Broadcasting...**")
@@ -961,242 +1021,407 @@ async def main_conversation_handler(client, message: Message):
         del user_conversations[uid]
         return
         
-    # --- ADMIN PREMIUM ---
     elif state == "admin_add_prem_wait":
+        if uid != OWNER_ID: return
         try:
             await users_collection.update_one({'_id': int(text)}, {'$set': {'is_premium': True}}, upsert=True)
-            await message.reply_text(f"✅ Premium Added: `{text}`")
+            await message.reply_text(f"✅ Premium Added to ID: `{text}`")
         except: await message.reply_text("❌ Invalid ID.")
         del user_conversations[uid]
         return
         
     elif state == "admin_rem_prem_wait":
+        if uid != OWNER_ID: return
         try:
             await users_collection.update_one({'_id': int(text)}, {'$set': {'is_premium': False}})
-            await message.reply_text(f"✅ Premium Removed: `{text}`")
+            await message.reply_text(f"✅ Premium Removed from ID: `{text}`")
         except: await message.reply_text("❌ Invalid ID.")
         del user_conversations[uid]
         return
 
     # --- MANUAL MODE INPUTS ---
     if state == "wait_manual_title":
-        convo["details"]["title"] = text; convo["details"]["name"] = text
-        convo["state"] = "wait_manual_year"; await message.reply_text("✅ Saved.\n📅 **Send Year:**")
+        convo["details"]["title"] = text
+        convo["details"]["name"] = text
+        convo["state"] = "wait_manual_year"
+        await message.reply_text("✅ Title Saved.\n\n📅 **Send Year:** (e.g. 2024)\n_Send 'skip' to leave empty._")
+        
     elif state == "wait_manual_year":
-        convo["details"]["release_date"] = f"{text}-01-01" if text.lower() != "skip" else "----"
-        convo["state"] = "wait_manual_rating"; await message.reply_text("✅ Saved.\n⭐ **Send Rating:**")
+        if text.lower() == "skip":
+            convo["details"]["release_date"] = "----"; convo["details"]["first_air_date"] = "----"
+        else:
+            convo["details"]["release_date"] = f"{text}-01-01"; convo["details"]["first_air_date"] = f"{text}-01-01"
+        convo["state"] = "wait_manual_rating"
+        await message.reply_text("✅ Year Saved.\n\n⭐ **Send Rating:** (e.g. 7.5)\n_Send 'skip' to leave empty._")
+        
     elif state == "wait_manual_rating":
         try: convo["details"]["vote_average"] = float(text)
         except: convo["details"]["vote_average"] = 0.0
-        convo["state"] = "wait_manual_genres"; await message.reply_text("✅ Saved.\n🎭 **Send Genres:**")
+        convo["state"] = "wait_manual_genres"
+        await message.reply_text("✅ Rating Saved.\n\n🎭 **Send Genres:** (e.g. Action, Drama)\n_Send 'skip' to leave empty._")
+        
     elif state == "wait_manual_genres":
-        convo["details"]["genres"] = [{"name": g.strip()} for g in text.split(",")] if text.lower() != "skip" else []
-        convo["state"] = "wait_manual_poster"; await message.reply_text("✅ Saved.\n🖼 **Send Poster:**")
+        if text.lower() == "skip": convo["details"]["genres"] = []
+        else: convo["details"]["genres"] = [{"name": g.strip()} for g in text.split(",")]
+        convo["state"] = "wait_manual_poster"
+        await message.reply_text("✅ Genres Saved.\n\n🖼 **Send Poster Photo:**")
+        
     elif state == "wait_manual_poster":
-        if not message.photo: return await message.reply_text("❌ Send Photo.")
-        path = await client.download_media(message, file_name=f"poster_{uid}.jpg")
-        convo["details"]["poster_local_path"] = os.path.abspath(path)
-        convo["state"] = "wait_lang"; await message.reply_text("✅ Saved.\n🌐 **Enter Language:**")
+        if not message.photo: return await message.reply_text("❌ Please send a Photo.")
+        
+        msg = await message.reply_text("⬇️ Downloading poster...")
+        try:
+            photo_path = await client.download_media(message, file_name=f"poster_{uid}_{int(time.time())}.jpg")
+            convo["details"]["poster_local_path"] = os.path.abspath(photo_path) 
+            await msg.delete()
+            convo["state"] = "wait_lang"
+            await message.reply_text("✅ Poster Saved.\n\n🌐 **Enter Language:**")
+        except Exception as e:
+            await msg.edit_text(f"❌ Error: {e}")
+
     elif state == "wait_lang" and convo.get("is_manual"):
-        convo["language"] = text; await show_upload_panel(message, uid)
-
-    # --- SETTINGS INPUTS ---
+        convo["language"] = text
+        await show_upload_panel(message, uid, is_edit=False)
+        
     elif state == "wait_custom_lang":
-        convo["language"] = text; await message.reply_text(f"✅ Set: {text}"); await show_upload_panel(message, uid)
-    elif state == "wait_badge_text":
-        convo["temp_badge_text"] = text; await show_upload_panel(message, uid)
-    elif state == "wait_custom_btn_name":
-        convo["temp_btn_name"] = text; convo["current_quality"] = "custom"
-        convo["state"] = "wait_file_upload"; await message.reply_text(f"📤 **Upload File for '{text}'**")
+        convo["language"] = text
+        await message.reply_text(f"✅ Language Set: **{text}**")
+        await show_upload_panel(message, uid, is_edit=False)
 
-    # --- EDIT POST FILE ---
+    elif state == "wait_badge_text":
+        convo["temp_badge_text"] = text
+        await show_upload_panel(message, uid, is_edit=False)
+
+    elif state == "wait_custom_btn_name":
+        convo["temp_btn_name"] = text
+        convo["current_quality"] = "custom"
+        convo["state"] = "wait_file_upload"
+        await message.reply_text(f"📤 **Upload File for: '{text}'**\n👉 Send Video/File now.")
+
+    # --- [NEW] EDIT POST FILE UPLOAD ---
     elif state == "wait_file_for_edit":
-        if not (message.video or message.document): return await message.reply_text("❌ Send File.")
-        await message.reply_text("📝 **Enter Button Name:**")
-        convo["state"] = "wait_btn_name_for_edit"; convo["pending_file_msg"] = message
+        if not (message.video or message.document):
+            return await message.reply_text("❌ Please send a **Video** or **Document** file.")
+        
+        btn_msg = await message.reply_text(
+            "📝 **File Received!**\n\n👉 **Enter Button Name:**\n(e.g. `Episode 2`, `1080p Link`)"
+        )
+        convo["state"] = "wait_btn_name_for_edit"
+        convo["pending_file_msg"] = message # Store file message temporarily
         return
+
+    # --- [NEW] EDIT POST FINAL STEP ---
     elif state == "wait_btn_name_for_edit":
-        # (Same logic as before, abbreviated for space but logic remains)
         button_name = text
-        # ... [Logic to update post similar to previous code] ...
-        # (For brevity, assuming you have this logic, if not I can paste it fully)
-        # Re-using the Edit Logic block from previous response to ensure full functionality
         chat_id = convo["edit_chat_id"]
         msg_id = convo["edit_msg_id"]
         old_markup = convo["old_markup"]
         file_msg = convo["pending_file_msg"]
         
-        status_msg = await message.reply_text("🔄 **Updating...**")
+        status_msg = await message.reply_text("🔄 **Processing & Updating Channel Post...**")
+        
         try:
-            log_msg = await file_msg.copy(LOG_CHANNEL_ID, caption=f"#UPDATE\nUser: {uid}\nItem: {button_name}")
-            fid = log_msg.video.file_id if log_msg.video else log_msg.document.file_id
+            # 1. Forward to Log
+            log_msg = await file_msg.copy(chat_id=LOG_CHANNEL_ID, caption=f"#UPDATE_POST\nUser: {uid}\nItem: {button_name}")
+            backup_file_id = log_msg.video.file_id if log_msg.video else log_msg.document.file_id
+            
+            # 2. DB Save
             code = generate_random_code()
             user_data = await users_collection.find_one({'_id': uid})
-            cap = f"🎬 **{button_name}**\n🤖 @{await get_bot_username()}"
-            await files_collection.insert_one({"code": code, "file_id": fid, "log_msg_id": log_msg.id, "caption": cap, "delete_timer": 0})
+            file_caption = f"🎬 **{button_name}**\n━━━━━━━━━━━━━━\n🤖 @{await get_bot_username()}"
             
-            link = await shorten_link(uid, f"https://t.me/{await get_bot_username()}?start={code}")
-            new_btn = InlineKeyboardButton(button_name, url=link)
+            await files_collection.insert_one({
+                "code": code, "file_id": backup_file_id, "log_msg_id": log_msg.id,
+                "caption": file_caption, "delete_timer": user_data.get('delete_timer', 0),
+                "uploader_id": uid, "created_at": datetime.now()
+            })
             
-            kb = old_markup.inline_keyboard if old_markup else []
-            if kb and len(kb[-1]) < 3 and "Episode" in button_name: kb[-1].append(new_btn)
-            else: kb.append([new_btn])
+            # 3. Link Gen
+            bot_uname = await get_bot_username()
+            if BLOG_URL and "http" in BLOG_URL:
+                base_blog = BLOG_URL.rstrip("/")
+                final_long_url = f"{base_blog}/?code={code}"
+            else:
+                final_long_url = f"https://t.me/{bot_uname}?start={code}"
             
-            await client.edit_message_reply_markup(chat_id, msg_id, reply_markup=InlineKeyboardMarkup(kb))
-            convo["repost_data"] = {"chat_id": chat_id, "message_id": msg_id, "update_text": button_name}
+            short_link = await shorten_link(uid, final_long_url)
             
-            await status_msg.edit_text("✅ Added!", reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🚀 Repost", callback_data="repost_full")],
-                [InlineKeyboardButton("❌ Done", callback_data="close_post")]
-            ]))
-        except Exception as e: await status_msg.edit_text(f"Error: {e}")
+            # 4. Update Keyboard
+            new_button = InlineKeyboardButton(button_name, url=short_link)
+            current_keyboard = old_markup.inline_keyboard if old_markup else []
+            
+            # Add logic (Row limit 3 for episodes)
+            if current_keyboard and len(current_keyboard[-1]) < 3 and "Episode" in button_name:
+                current_keyboard[-1].append(new_button)
+            else:
+                current_keyboard.append([new_button])
+                
+            # 5. Edit Message
+            await client.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=msg_id,
+                reply_markup=InlineKeyboardMarkup(current_keyboard)
+            )
+            
+            # 6. ASK REPOST
+            convo["repost_data"] = {
+                "chat_id": chat_id,
+                "message_id": msg_id,
+                "update_text": button_name
+            }
+            
+            await status_msg.edit_text(
+                f"✅ **Successfully Added: {button_name}**\n"
+                f"The old post has been updated.\n\n"
+                f"🚀 **Do you want to Repost to Channel?**\n"
+                f"(So users get a notification)",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🚀 Repost Full Post (Fresh)", callback_data="repost_full")],
+                    [InlineKeyboardButton("🔔 Send Update Alert Only", callback_data="repost_alert")],
+                    [InlineKeyboardButton("❌ Done (No Post)", callback_data="close_post")]
+                ])
+            )
+            
+        except Exception as e:
+            logger.error(f"Edit Post Error: {e}")
+            await status_msg.edit_text(f"❌ **Error:** {str(e)}")
         return
 
-    # --- FILE UPLOAD LOGIC (CORE UPDATE) ---
+    # --- [UPDATED] FILE UPLOAD LOGIC (FOLDER SYSTEM + AUTO DETECT) ---
     elif state == "wait_file_upload":
-        if not (message.video or message.document): return await message.reply_text("❌ Send File.")
+        if not (message.video or message.document):
+            return await message.reply_text("❌ Please send a **Video** or **Document** file.")
         
         status_msg = await message.reply(f"🔄 **Processing...**")
         
-        # 1. Determine Group Name
+        # 1. Determine Group Name (This is the "Episode 1" Button Text)
         is_auto = convo.get("is_auto_detect", False)
         file_name = message.video.file_name if message.video else message.document.file_name
         if not file_name: file_name = message.caption or "Unknown"
         
         group_name = ""
-        display_name = ""
+        display_qual = ""
         
         if is_auto:
-            # Smart Regex
-            ep = re.search(r"[Ee](\d+)", file_name)
-            s = re.search(r"[Ss](\d+)", file_name)
-            q = re.search(r"(480p|720p|1080p)", file_name)
+            # === SMART REGEX FOR EPISODE DETECTION ===
+            ep_match = re.search(r"[Ee](\d+)", file_name)
+            s_match = re.search(r"[Ss](\d+)", file_name)
+            q_match = re.search(r"(480p|720p|1080p|2160p)", file_name)
             
-            ep_n = int(ep.group(1)) if ep else 0
-            s_n = int(s.group(1)) if s else 1
-            display_name = q.group(1) if q else "HD"
+            ep_num = int(ep_match.group(1)) if ep_match else 0
+            s_num = int(s_match.group(1)) if s_match else 1
+            display_qual = q_match.group(1) if q_match else "HD"
             
-            if ep_n > 0: group_name = f"S{s_n} E{ep_n}"
-            else: group_name = file_name[:15]
+            if ep_num > 0:
+                group_name = f"S{s_num} E{ep_num}"
+            else:
+                group_name = file_name[:15] # Fallback
         else:
-            # Manual Mode
-            group_name = convo.get("temp_btn_name") or f"Movie/File {convo['current_quality']}"
-            display_name = convo["current_quality"]
+            # === MANUAL MODE ===
+            if convo["current_quality"] == "custom": 
+                group_name = convo["temp_btn_name"]
+                display_qual = "File"
+            else: 
+                # For manual quality upload, we can treat Quality as the group or generic Movie
+                group_name = f"Movie {convo['current_quality']}"
+                display_qual = convo["current_quality"]
 
-        # 2. Code Management (The Folder Trick)
+        # 2. CODE MANAGEMENT (THE FOLDER TRICK)
+        # Check if we already have a code for this Group Name (e.g., "S1 E1")
         if group_name in convo["group_codes"]:
+            # Use EXISTING code -> Adds this file to the SAME folder link
             code = convo["group_codes"][group_name]
-            is_new = False
+            is_new_link = False
         else:
+            # Generate NEW code -> Creates a NEW button/link
             code = generate_random_code()
             convo["group_codes"][group_name] = code
-            is_new = True
+            is_new_link = True
             
         try:
-            log = await message.copy(LOG_CHANNEL_ID, caption=f"#BACKUP\nUser: {uid}\nGroup: {group_name}")
-            fid = log.video.file_id if log.video else log.document.file_id
+            # 1. Forward to Log Channel
+            log_msg = await message.copy(chat_id=LOG_CHANNEL_ID, caption=f"#BACKUP\nUser: {uid}\nGroup: {group_name}")
+            backup_file_id = log_msg.video.file_id if log_msg.video else log_msg.document.file_id
             
-            d = convo['details']
-            title = d.get('title') or d.get('name') or "File"
+            # 2. Generate RICH CAPTION for the file
+            details = convo['details']
+            title = details.get('title') or details.get('name') or "Unknown"
+            date = details.get("release_date") or details.get("first_air_date") or "----"
+            year = date[:4]
+            lang = convo.get("language", "Unknown")
             
-            file_cap = f"🎬 **{title}**\n📂 **{group_name}**\n🔰 **Quality:** {display_name}\n🤖 @{await get_bot_username()}"
+            if isinstance(details.get("genres"), list) and len(details["genres"]) > 0:
+                genre_str = ", ".join([g["name"] for g in details.get("genres", [])[:3]]) if isinstance(details["genres"][0], dict) else str(details.get("genres")[0])
+            else:
+                genre_str = "N/A"
+
+            file_caption = (
+                f"🎬 **{title} ({year})**\n"
+                f"📂 **{group_name}**\n"
+                f"🔰 **Quality:** {display_qual}\n"
+                f"🔊 **Language:** {lang}\n"
+                f"🎭 **Genre:** {genre_str}\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"🤖 @{await get_bot_username()}"
+            )
             
-            # Save to DB
+            # 3. Save to Database (Allow multiple files with SAME code)
+            user_data = await users_collection.find_one({'_id': uid})
+            
             await files_collection.insert_one({
-                "code": code, "file_id": fid, "log_msg_id": log.id,
-                "caption": file_cap, "uploader_id": uid, "created_at": datetime.now(), "delete_timer": 0
+                "code": code, 
+                "file_id": backup_file_id, 
+                "log_msg_id": log_msg.id,
+                "caption": file_caption, 
+                "delete_timer": user_data.get('delete_timer', 0),
+                "uploader_id": uid, 
+                "created_at": datetime.now()
             })
             
-            if is_new:
-                bot_u = await get_bot_username()
-                long_u = f"{BLOG_URL.rstrip('/')}/?code={code}" if BLOG_URL else f"https://t.me/{bot_u}?start={code}"
-                short = await shorten_link(uid, long_u)
-                convo['links'][group_name] = short
+            # 4. Generate Link (Only if new group)
+            if is_new_link:
+                bot_uname = await get_bot_username()
+                if BLOG_URL and "http" in BLOG_URL:
+                    final_long_url = f"{BLOG_URL.rstrip('/')}/?code={code}"
+                else:
+                    final_long_url = f"https://t.me/{bot_uname}?start={code}"
+                
+                short_link = await shorten_link(uid, final_long_url)
+                convo['links'][group_name] = short_link
             
             await message.delete()
             
             if is_auto:
-                await status_msg.edit_text(f"✅ **Added to Folder:** {group_name}\n({display_name})\n\n👇 **Send Next Quality/File...**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ DONE", callback_data="proc_final")]]))
+                await status_msg.edit_text(
+                    f"✅ **Added to Folder:** {group_name}\n({display_qual})\n\n👇 **Send Next Quality/Episode...**",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ DONE", callback_data="proc_final")]])
+                )
             else:
                 await show_upload_panel(status_msg, uid, is_edit=False)
-                
+            
         except Exception as e:
-            await status_msg.edit_text(f"Error: {e}")
+            logger.error(f"Upload Error: {e}")
+            await status_msg.edit_text(f"❌ **Error:** {str(e)}")
 
 # ==============================================================================
-# 11. FINAL POST
+# 11. FINAL POST PROCESSING (GRID LAYOUT)
 # ==============================================================================
 
 @bot.on_callback_query(filters.regex("^proc_final"))
 async def process_final_post(client, cb: CallbackQuery):
     uid = cb.from_user.id
     convo = user_conversations.get(uid)
-    if not convo or not convo['links']: return await cb.answer("Empty!", show_alert=True)
     
+    if not convo: return await cb.answer("Session expired.", show_alert=True)
+    if not convo['links']: return await cb.answer("❌ No files uploaded!", show_alert=True)
+        
     await cb.message.edit_text("⏳ **Generating Post...**")
     
-    caption = await generate_channel_caption(convo['details'], convo.get('language', 'Unknown'), {}, False)
+    # 1. Caption
+    caption = await generate_channel_caption(
+        convo['details'], convo.get('language', 'Unknown'), convo['links'], is_manual=convo.get("is_manual", False)
+    )
     
-    # Sort Buttons by Episode Number
+    # 2. Buttons (Simple Grid Layout)
+    buttons = []
+    
+    # Smart Sort keys: S1 E1, S1 E2...
     def sort_key(k):
         nums = re.findall(r'\d+', k)
         return int(nums[-1]) if nums else 0
     
-    sorted_keys = sorted(convo['links'].keys(), key=sort_key)
+    sorted_groups = sorted(convo['links'].keys(), key=sort_key)
     
-    buttons = []
-    temp = []
-    
-    for k in sorted_keys:
-        link = convo['links'][k]
-        btn_txt = k.replace("Episode", "Ep").replace("Season", "S")
-        temp.append(InlineKeyboardButton(btn_txt, url=link))
-        if len(temp) == 3:
-            buttons.append(temp); temp = []
-    if temp: buttons.append(temp)
-    
-    # Tutorial
-    udata = await users_collection.find_one({'_id': uid})
-    if udata.get('tutorial_url'): buttons.append([InlineKeyboardButton("ℹ️ How to Download", url=udata['tutorial_url'])])
-    
-    # Poster
-    d = convo['details']
-    p_in = d.get('poster_local_path') or (f"https://image.tmdb.org/t/p/w500{d['poster_path']}" if d.get('poster_path') else None)
-    
-    buf, _ = watermark_poster(p_in, udata.get('watermark_text'), convo.get('temp_badge_text'))
-    
-    if buf:
-        buf.seek(0)
-        preview = await client.send_photo(uid, buf, caption=caption, reply_markup=InlineKeyboardMarkup(buttons))
-    else:
-        preview = await client.send_message(uid, caption, reply_markup=InlineKeyboardMarkup(buttons))
+    # Grid Layout (3 buttons per row)
+    temp_row = []
+    for group in sorted_groups:
+        link = convo['links'][group]
+        # Shorten Text: "Episode 1" -> "Ep 1", "Season 1" -> "S1"
+        btn_text = group.replace("Episode", "Ep").replace("Season", "S")
         
-    convo['final_post_data'] = {'file_id': preview.photo.file_id if preview.photo else None, 'caption': caption, 'buttons': buttons}
+        temp_row.append(InlineKeyboardButton(btn_text, url=link))
+        if len(temp_row) == 3:
+            buttons.append(temp_row)
+            temp_row = []
+            
+    if temp_row: buttons.append(temp_row)
     
-    # Channel Select
-    chans = udata.get('channel_ids', [])
-    c_btns = [[InlineKeyboardButton(f"📢 {c}", callback_data=f"sndch_{c}")] for c in chans]
-    c_btns.append([InlineKeyboardButton("✅ DONE", callback_data="close_post")])
+    # Tutorial Button
+    user_data = await users_collection.find_one({'_id': uid})
+    if user_data.get('tutorial_url'):
+        buttons.append([InlineKeyboardButton("ℹ️ How to Download", url=user_data['tutorial_url'])])
     
-    await client.send_message(uid, "👇 **Select Channel:**", reply_markup=InlineKeyboardMarkup(c_btns))
+    # 3. Poster Processing
+    details = convo['details']
+    poster_input = None
+    if details.get('poster_local_path') and os.path.exists(details['poster_local_path']):
+        poster_input = details['poster_local_path']
+    elif details.get('poster_path'):
+        poster_input = f"https://image.tmdb.org/t/p/w500{details['poster_path']}"
+        
+    poster_buffer, error = watermark_poster(poster_input, user_data.get('watermark_text'), convo.get('temp_badge_text'))
+    
+    if not poster_buffer: return await cb.message.edit_text(f"❌ Image Error: {error}")
+    
+    # 4. Send Preview
+    poster_buffer.seek(0)
+    try:
+        preview_msg = await client.send_photo(
+            chat_id=uid, photo=poster_buffer, caption=caption, reply_markup=InlineKeyboardMarkup(buttons)
+        )
+    except Exception as e:
+        return await cb.message.edit_text(f"❌ Failed to send preview: {e}")
+
+    await cb.message.delete()
+    
+    # 5. Store for Channel Post
+    convo['final_post_data'] = {
+        'file_id': preview_msg.photo.file_id, 'caption': caption, 'buttons': buttons
+    }
+    
+    # 6. Channel Selection
+    channels = user_data.get('channel_ids', [])
+    channel_btns = []
+    
+    if channels:
+        for cid in channels:
+            channel_btns.append([InlineKeyboardButton(f"📢 Post to: {cid}", callback_data=f"sndch_{cid}")])
+    else:
+        await client.send_message(uid, "⚠️ **No Channels Saved!** Add using `/addchannel <id>`.")
+    
+    channel_btns.append([InlineKeyboardButton("✅ DONE / CLOSE", callback_data="close_post")])
+    
+    await client.send_message(uid, "👇 **Select Channel to Publish:**", reply_markup=InlineKeyboardMarkup(channel_btns))
 
 @bot.on_callback_query(filters.regex("^sndch_"))
-async def snd_ch(client, cb: CallbackQuery):
+async def send_to_channel_handler(client, cb: CallbackQuery):
     uid = cb.from_user.id
-    cid = cb.data.split("_")[1]
-    d = user_conversations.get(uid, {}).get('final_post_data')
-    if d:
-        try:
-            if d['file_id']: await client.send_photo(int(cid), d['file_id'], caption=d['caption'], reply_markup=InlineKeyboardMarkup(d['buttons']))
-            else: await client.send_message(int(cid), d['caption'], reply_markup=InlineKeyboardMarkup(d['buttons']))
-            await cb.answer("✅ Posted!")
-        except Exception as e: await cb.answer(f"❌ Error: {e}")
-    else: await cb.answer("Expired.")
+    target_cid = cb.data.split("_")[1]
+    convo = user_conversations.get(uid)
+    
+    if not convo or 'final_post_data' not in convo: return await cb.answer("❌ Session Expired.", show_alert=True)
+    
+    data = convo['final_post_data']
+    try:
+        await client.send_photo(
+            chat_id=int(target_cid), photo=data['file_id'], caption=data['caption'], reply_markup=InlineKeyboardMarkup(data['buttons'])
+        )
+        await cb.answer(f"✅ Posted to {target_cid}", show_alert=True)
+    except Exception as e:
+        await cb.answer(f"❌ Failed: {e}", show_alert=True)
 
 @bot.on_callback_query(filters.regex("^close_post"))
-async def close_p(client, cb: CallbackQuery):
-    if cb.from_user.id in user_conversations: del user_conversations[cb.from_user.id]
+async def close_post_handler(client, cb: CallbackQuery):
+    uid = cb.from_user.id
+    if uid in user_conversations:
+        local_path = user_conversations[uid].get('details', {}).get('poster_local_path')
+        if local_path and os.path.exists(local_path):
+            try: os.remove(local_path)
+            except: pass     
+        del user_conversations[uid]
+        
     await cb.message.delete()
+    await cb.answer("✅ Session Closed.", show_alert=True)
 
 if __name__ == "__main__":
     logger.info("🚀 Bot is starting...")
