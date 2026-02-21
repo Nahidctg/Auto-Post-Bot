@@ -5,17 +5,17 @@
 # ==============================================================================
 # Update Log:
 # 1. Added Rich Caption Support for Files.
-# 2. MOVIE REQUEST SYSTEM.
-# 3. BATCH UPLOAD WITH OPTIONAL SEASON TAG.
-# 4. BLOGGER/WEBSITE REDIRECT SUPPORT (Anti-Ban Link System).
-# 5. ADD EPISODE TO OLD POST & REPOST SYSTEM.
-# 6. GLOBAL CANCEL COMMAND (/cancel).
-# 7. AUTO YOUTUBE TRAILER FETCH.
-# 8. TRENDING MOVIES COMMAND (/trending).
-# 9. SETTINGS DASHBOARD (/settings).
-# 10. DATABASE BACKUP (/backup) FOR OWNER.
-# 11. ASYNC ANTI-LAG IMAGE PROCESSING.
-# 12. ADMIN DIRECT COMMANDS ADDED & BUTTON BUGS FIXED.
+# 2. BATCH UPLOAD WITH OPTIONAL SEASON TAG.
+# 3. BLOGGER/WEBSITE REDIRECT SUPPORT (Anti-Ban Link System).
+# 4. ADD EPISODE TO OLD POST & REPOST SYSTEM.
+# 5. GLOBAL CANCEL COMMAND (/cancel).
+# 6. AUTO YOUTUBE TRAILER FETCH & TRENDING MOVIES.
+# 7. SETTINGS DASHBOARD (/settings) & DATABASE BACKUP (/backup).
+# 8. ASYNC ANTI-LAG IMAGE PROCESSING.
+# 9. SMART AUTO-REPLY REQUEST SYSTEM (With Auto-Spell Checker)
+# 10. DIRECT TEXT SEARCH (No need to click "Request Movie" button!)
+# 11. SET DOMAIN COMMAND (/setdomain) FOR URL SHORTENERS.
+# 12. [FIXED] AUTO-SEARCH URL SHORTENER INTEGRATION FOR INCOME GENERATION.
 # ==============================================================================
 
 import os
@@ -62,7 +62,7 @@ OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0")) 
 
 # ------------------------------------------------------------------------------
-# 🌐 BLOGGER / WEBSITE REDIRECT CONFIGURATION (MIDDLEMAN SYSTEM)
+# 🌐 BLOGGER / WEBSITE REDIRECT CONFIGURATION
 # ------------------------------------------------------------------------------
 BLOG_URL = os.getenv("BLOG_URL", "") 
 
@@ -268,7 +268,6 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
         img.paste(original_img)
         draw = ImageDraw.Draw(img)
 
-        # ---- Badge Logic ----
         if badge_text and badge_text.strip().lower() != "none":
             badge_font_size = int(img.width / 9)
             font_path = download_font()
@@ -340,7 +339,6 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
             except:
                 draw.text((x, y), badge_text, font=badge_font, fill="white")
 
-        # ---- Watermark Logic ----
         if watermark_text:
             font_size = int(img.width / 12)
             try:
@@ -516,6 +514,7 @@ async def settings_dashboard(client, message: Message):
             f"📢 **Saved Channels:** `{channel_list}`\n\n"
             f"💡 **How to change:**\n"
             f"• `/setwatermark Text`\n"
+            f"• `/setdomain url.com`\n"
             f"• `/setapi Key`\n"
             f"• `/settimer 10` (in mins)\n"
             f"• `/addchannel -100xxx`")
@@ -658,11 +657,10 @@ async def start_cmd(client, message: Message):
         ])
     else:
         status_text = "💎 **Premium User**" if is_premium else "👤 **Free User**"
-        welcome_text = f"👋 **Hello {user.first_name}!**\n\nYour Status: {status_text}\n\n👇 **Available Commands:**\n`/post <Name/Link>` - Auto Post (Supports IMDb/TMDB)\n`/manual` - Manual Post (Free for All)\n`/addep <Link>` - Add Episode to Old Post\n`/trending` - Get Trending Movies/Series"
+        welcome_text = f"👋 **Hello {user.first_name}!**\n\nYour Status: {status_text}\n\n👇 **Available Commands:**\n`/post <Name/Link>` - Auto Post (Supports IMDb/TMDB)\n`/manual` - Manual Post (Free for All)\n`/addep <Link>` - Add Episode to Old Post\n`/trending` - Get Trending Movies/Series\n\n🔍 **মুভি খুঁজতে সরাসরি মুভির নাম লিখে সেন্ড করুন!**"
         
         user_buttons = [
             [InlineKeyboardButton("👤 My Account", callback_data="my_account")],
-            [InlineKeyboardButton("🙏 Request Movie", callback_data="request_movie")]
         ]
         if not is_premium:
             user_buttons.insert(0, [InlineKeyboardButton("💎 Buy Premium Access", user_id=OWNER_ID)])
@@ -683,7 +681,7 @@ async def callback_handler(client, cb: CallbackQuery):
         await cb.answer(f"User: {cb.from_user.first_name}\nStatus: {status}", show_alert=True)
         
     elif data == "api_help":
-        help_text = "**⚙️ Commands:**\n`/setapi <key>`\n`/setwatermark <text>`\n`/settutorial <link>`\n`/addchannel <id>`"
+        help_text = "**⚙️ Commands:**\n`/setdomain <url>`\n`/setapi <key>`\n`/setwatermark <text>`\n`/settutorial <link>`\n`/addchannel <id>`"
         await cb.answer(help_text, show_alert=True)
 
     elif data == "request_movie":
@@ -719,7 +717,7 @@ async def cancel_request(client, cb: CallbackQuery):
 
 # --- Settings Commands ---
 
-@bot.on_message(filters.command(["setwatermark", "setapi", "settimer", "addchannel", "delchannel", "mychannels", "settutorial"]) & filters.private)
+@bot.on_message(filters.command(["setwatermark", "setapi", "setdomain", "settimer", "addchannel", "delchannel", "mychannels", "settutorial"]) & filters.private)
 @force_subscribe
 async def settings_commands(client, message: Message):
     cmd = message.command[0].lower()
@@ -730,6 +728,14 @@ async def settings_commands(client, message: Message):
         if text.lower() in ['none', 'off', 'clear']: text = ""
         await users_collection.update_one({'_id': uid}, {'$set': {'watermark_text': text}}, upsert=True)
         await message.reply_text(f"✅ Watermark set: `{text}`")
+
+    elif cmd == "setdomain":
+        if len(message.command) > 1:
+            domain = message.command[1].replace("https://", "").replace("http://", "").strip("/")
+            await users_collection.update_one({'_id': uid}, {'$set': {'shortener_url': domain}}, upsert=True)
+            await message.reply_text(f"✅ Shortener Domain Saved: `{domain}`")
+        else:
+            await message.reply_text("❌ Usage: `/setdomain shareus.io`")
 
     elif cmd == "setapi":
         if len(message.command) > 1:
@@ -1145,21 +1151,80 @@ async def repost_handler(client, cb: CallbackQuery):
 # 11. MAIN MESSAGE HANDLER (TEXT & FILES)
 # ==============================================================================
 
-@bot.on_message(filters.private & (filters.text | filters.video | filters.document | filters.photo) & ~filters.command(["start", "post", "manual", "addep", "cancel", "trending", "settings", "backup", "setwatermark", "setapi", "settimer", "addchannel", "delchannel", "mychannels", "settutorial", "stats", "broadcast", "addpremium", "rempremium"]))
+@bot.on_message(filters.private & (filters.text | filters.video | filters.document | filters.photo) & ~filters.command(["start", "post", "manual", "addep", "cancel", "trending", "settings", "backup", "setwatermark", "setapi", "setdomain", "settimer", "addchannel", "delchannel", "mychannels", "settutorial", "stats", "broadcast", "addpremium", "rempremium"]))
 async def main_conversation_handler(client, message: Message):
     uid = message.from_user.id
     convo = user_conversations.get(uid)
     
-    if not convo or "state" not in convo:
-        return
+    if convo and "state" in convo:
+        state = convo["state"]
+        text = message.text
+    else:
+        if message.text:
+            state = "waiting_for_request"
+            text = message.text
+        else:
+            return 
     
-    state = convo["state"]
-    text = message.text
-    
+    # ---------------------------------------------------------
+    # 🎬 NEW SMART AUTO-REPLY SYSTEM (WITH INCOME/SHORTENER FIX)
+    # ---------------------------------------------------------
     if state == "waiting_for_request":
         request_text = text
         if not request_text: return await message.reply_text("❌ Please send text only.")
         
+        msg = await message.reply_text("🔍 **আপনার মুভিটি আমাদের ডাটাবেসে খোঁজা হচ্ছে...**\n(দয়া করে অপেক্ষা করুন)")
+        
+        try:
+            tmdb_results = await asyncio.to_thread(search_tmdb, request_text)
+            if tmdb_results:
+                corrected_title = tmdb_results[0].get('title') or tmdb_results[0].get('name')
+            else:
+                corrected_title = request_text
+
+            clean_name = re.sub(r'[^a-zA-Z0-9\s]', ' ', corrected_title)
+            words = [w for w in clean_name.split() if len(w) > 1][:4] 
+            if not words: words = request_text.split()[:4]
+            
+            regex_pattern = "".join([f"(?=.*{re.escape(w)})" for w in words])
+            query = {"caption": {"$regex": regex_pattern, "$options": "i"}}
+            
+            found_files = await files_collection.find(query).to_list(length=10)
+            
+            if found_files:
+                buttons = []
+                for f in found_files:
+                    qual_match = re.search(r"Quality:\*\*\s*(.*?)\n", f.get('caption', ''))
+                    qual = qual_match.group(1).strip() if qual_match else "Download"
+                    
+                    # --- INCOME FIX: Using URL Shortener for Search Results ---
+                    bot_uname = await get_bot_username()
+                    file_code = f['code']
+                    
+                    if BLOG_URL and "http" in BLOG_URL:
+                        base_blog = BLOG_URL.rstrip("/")
+                        final_long_url = f"{base_blog}/?code={file_code}"
+                    else:
+                        final_long_url = f"https://t.me/{bot_uname}?start={file_code}"
+                    
+                    # Get the uploader's ID so the correct shortener is applied
+                    uploader_id = f.get('uploader_id', uid) 
+                    short_link = await shorten_link(uploader_id, final_long_url)
+                    
+                    buttons.append([InlineKeyboardButton(f"📥 {qual}", url=short_link)])
+                    
+                await msg.edit_text(
+                    f"✅ **খুশির খবর!**\nআপনি যেই মুভিটি খুঁজছেন, তা আমাদের কাছে আগে থেকেই আপলোড করা আছে।\n\n"
+                    f"🎬 **Name:** {corrected_title}\n\n"
+                    f"👇 নিচ থেকে সরাসরি ডাউনলোড করে নিন:",
+                    reply_markup=InlineKeyboardMarkup(buttons)
+                )
+                user_conversations.pop(uid, None)
+                return
+        except Exception as e:
+            logger.error(f"Auto Reply Error: {e}")
+            pass 
+            
         req_entry = {
             "user_id": uid,
             "user_name": message.from_user.first_name,
@@ -1171,13 +1236,16 @@ async def main_conversation_handler(client, message: Message):
         if LOG_CHANNEL_ID:
             await client.send_message(
                 LOG_CHANNEL_ID, 
-                f"📨 **New Request!**\n👤 User: {message.from_user.mention}\n📝 Request: `{request_text}`"
+                f"📨 **New Request!**\n👤 User: {message.from_user.mention}\n📝 Request: `{request_text}`\n🤖 Auto-Search: `Not Found`"
             )
             
-        await message.reply_text("✅ **Your Request has been submitted to Admins!**")
-        del user_conversations[uid]
+        await msg.edit_text("⏳ **মুভিটি আমাদের ডাটাবেসে পাওয়া যায়নি।**\n\nআপনার রিকোয়েস্টটি অ্যাডমিনদের কাছে পাঠানো হয়েছে। খুব দ্রুত এটি আপলোড করা হবে!")
+        user_conversations.pop(uid, None)
         return
 
+    # ---------------------------------------------------------
+    # OTHER STATES
+    # ---------------------------------------------------------
     if state == "admin_broadcast_wait":
         if uid != OWNER_ID: return
         msg = await message.reply_text("📣 **Broadcasting...**")
@@ -1185,7 +1253,7 @@ async def main_conversation_handler(client, message: Message):
             try: await message.copy(chat_id=u['_id']); await asyncio.sleep(0.05)
             except: pass
         await msg.edit_text("✅ Broadcast complete.")
-        del user_conversations[uid]
+        user_conversations.pop(uid, None)
         return
         
     elif state == "admin_add_prem_wait":
@@ -1194,7 +1262,7 @@ async def main_conversation_handler(client, message: Message):
             await users_collection.update_one({'_id': int(text)}, {'$set': {'is_premium': True}}, upsert=True)
             await message.reply_text(f"✅ Premium Added to ID: `{text}`")
         except: await message.reply_text("❌ Invalid ID.")
-        del user_conversations[uid]
+        user_conversations.pop(uid, None)
         return
         
     elif state == "admin_rem_prem_wait":
@@ -1203,7 +1271,7 @@ async def main_conversation_handler(client, message: Message):
             await users_collection.update_one({'_id': int(text)}, {'$set': {'is_premium': False}})
             await message.reply_text(f"✅ Premium Removed from ID: `{text}`")
         except: await message.reply_text("❌ Invalid ID.")
-        del user_conversations[uid]
+        user_conversations.pop(uid, None)
         return
 
     if state == "wait_batch_season_input":
@@ -1584,7 +1652,7 @@ async def close_post_handler(client, cb: CallbackQuery):
         if local_path and os.path.exists(local_path):
             try: os.remove(local_path)
             except: pass     
-        del user_conversations[uid]
+        user_conversations.pop(uid, None)
         
     await cb.message.delete()
     await cb.answer("✅ Session Closed.", show_alert=True)
