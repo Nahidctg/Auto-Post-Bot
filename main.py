@@ -9,12 +9,13 @@
 # 3. BATCH UPLOAD WITH OPTIONAL SEASON TAG.
 # 4. BLOGGER/WEBSITE REDIRECT SUPPORT (Anti-Ban Link System).
 # 5. ADD EPISODE TO OLD POST & REPOST SYSTEM.
-# 6. [NEW] GLOBAL CANCEL COMMAND (/cancel).
-# 7. [NEW] AUTO YOUTUBE TRAILER FETCH.
-# 8. [NEW] TRENDING MOVIES COMMAND (/trending).
-# 9. [NEW] SETTINGS DASHBOARD (/settings).
-# 10. [NEW] DATABASE BACKUP (/backup) FOR OWNER.
-# 11. [NEW] ASYNC ANTI-LAG IMAGE PROCESSING.
+# 6. GLOBAL CANCEL COMMAND (/cancel).
+# 7. AUTO YOUTUBE TRAILER FETCH.
+# 8. TRENDING MOVIES COMMAND (/trending).
+# 9. SETTINGS DASHBOARD (/settings).
+# 10. DATABASE BACKUP (/backup) FOR OWNER.
+# 11. ASYNC ANTI-LAG IMAGE PROCESSING.
+# 12. ADMIN DIRECT COMMANDS ADDED & BUTTON BUGS FIXED.
 # ==============================================================================
 
 import os
@@ -249,15 +250,15 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
     try:
         original_img = None
         if isinstance(poster_input, str):
-            if poster_input.startswith("http"): # URL
+            if poster_input.startswith("http"): 
                 img_data = requests.get(poster_input, timeout=15).content
                 original_img = Image.open(io.BytesIO(img_data)).convert("RGBA")
-            else: # Local File
+            else: 
                 if os.path.exists(poster_input):
                     original_img = Image.open(poster_input).convert("RGBA")
                 else:
                     return None, f"Local file not found: {poster_input}"
-        else: # BytesIO
+        else: 
             original_img = Image.open(poster_input).convert("RGBA")
             
         if not original_img:
@@ -423,7 +424,7 @@ def get_tmdb_details(media_type, media_id):
         r = requests.get(url, timeout=10)
         r.raise_for_status()
         data = r.json()
-        data['media_type'] = media_type # ensure media_type is preserved
+        data['media_type'] = media_type 
         return data
     except Exception:
         return None
@@ -482,7 +483,7 @@ https://t.me/+GL_XAS4MsJg4ODM1"""
     return caption + footer
 
 # ==============================================================================
-# 5. BOT COMMAND HANDLERS
+# 5. GENERAL & ADMIN DIRECT COMMANDS
 # ==============================================================================
 
 @bot.on_message(filters.command("cancel") & filters.private)
@@ -532,7 +533,6 @@ async def backup_db_cmd(client, message: Message):
         
         backup_data = {"users": users, "files": files}
         
-        # Save to JSON
         with open("db_backup.json", "w", encoding="utf-8") as f:
             json.dump(backup_data, f, default=str, indent=4)
             
@@ -542,6 +542,53 @@ async def backup_db_cmd(client, message: Message):
     except Exception as e:
         await msg.edit_text(f"❌ **Backup Failed:** {str(e)}")
 
+# --- ADMIN DIRECT COMMANDS ---
+@bot.on_message(filters.command("stats") & filters.private)
+async def stats_command(client, message: Message):
+    if message.from_user.id != OWNER_ID: return
+    total = await users_collection.count_documents({})
+    prem = await users_collection.count_documents({'is_premium': True})
+    files = await files_collection.count_documents({})
+    reqs = await requests_collection.count_documents({})
+    await message.reply_text(f"📊 **Bot Statistics:**\n\n👥 Total Users: {total}\n💎 Premium Users: {prem}\n📂 Total Files: {files}\n📨 Pending Requests: {reqs}")
+
+@bot.on_message(filters.command("broadcast") & filters.private)
+async def broadcast_command(client, message: Message):
+    if message.from_user.id != OWNER_ID: return
+    user_conversations[message.from_user.id] = {"state": "admin_broadcast_wait"}
+    await message.reply_text("📢 **Broadcast Mode**\n\nSend the message (Text/Photo/Video) you want to broadcast.\n(Type /cancel to stop)")
+
+@bot.on_message(filters.command("addpremium") & filters.private)
+async def add_premium_cmd(client, message: Message):
+    if message.from_user.id != OWNER_ID: return
+    if len(message.command) > 1:
+        try:
+            user_id = int(message.command[1])
+            await users_collection.update_one({'_id': user_id}, {'$set': {'is_premium': True}}, upsert=True)
+            await message.reply_text(f"✅ Premium Added to ID: `{user_id}`")
+        except:
+            await message.reply_text("❌ Invalid ID format.")
+    else:
+        user_conversations[message.from_user.id] = {"state": "admin_add_prem_wait"}
+        await message.reply_text("➕ **Add Premium**\n\nSend User ID.\n(Type /cancel to stop)")
+
+@bot.on_message(filters.command("rempremium") & filters.private)
+async def rem_premium_cmd(client, message: Message):
+    if message.from_user.id != OWNER_ID: return
+    if len(message.command) > 1:
+        try:
+            user_id = int(message.command[1])
+            await users_collection.update_one({'_id': user_id}, {'$set': {'is_premium': False}})
+            await message.reply_text(f"✅ Premium Removed from ID: `{user_id}`")
+        except:
+            await message.reply_text("❌ Invalid ID format.")
+    else:
+        user_conversations[message.from_user.id] = {"state": "admin_rem_prem_wait"}
+        await message.reply_text("➖ **Remove Premium**\n\nSend User ID.\n(Type /cancel to stop)")
+
+# ==============================================================================
+# 6. START COMMAND & BOT MENUS
+# ==============================================================================
 
 @bot.on_message(filters.command("start") & filters.private)
 @force_subscribe
@@ -629,7 +676,7 @@ async def start_cmd(client, message: Message):
 @bot.on_callback_query(filters.regex(r"^(admin_|my_account|api_help|request_movie)"))
 async def callback_handler(client, cb: CallbackQuery):
     data = cb.data
-    uid = cb.fromuser.id if hasattr(cb, 'from_user') else cb.from_user.id
+    uid = cb.from_user.id 
     
     if data == "my_account":
         status = "Premium 💎" if await is_user_premium(uid) else "Free 👤"
@@ -727,7 +774,7 @@ async def settings_commands(client, message: Message):
         else: await message.reply_text("❌ No channels saved.")
 
 # ==============================================================================
-# 6. AUTO POST (TMDB & IMDb SMART SEARCH) & TRENDING
+# 7. AUTO POST (TMDB & IMDb SMART SEARCH) & TRENDING
 # ==============================================================================
 
 @bot.on_message(filters.command("trending") & filters.private)
@@ -802,7 +849,7 @@ async def post_search_cmd(client, message: Message):
     await msg.edit_text(f"👇 **Found {len(results)} Result(s):**", reply_markup=InlineKeyboardMarkup(buttons))
 
 # ==============================================================================
-# 7. MANUAL POST SYSTEM
+# 8. MANUAL POST SYSTEM
 # ==============================================================================
 
 @bot.on_message(filters.command("manual") & filters.private)
@@ -830,7 +877,7 @@ async def manual_type_handler(client, cb: CallbackQuery):
     await cb.message.edit_text(f"📝 **Step 1:** Send the **Title** of the {m_type}.")
 
 # ==============================================================================
-# 8. UPLOAD PANEL & HANDLERS
+# 9. UPLOAD PANEL & HANDLERS
 # ==============================================================================
 
 @bot.on_callback_query(filters.regex("^sel_"))
@@ -991,7 +1038,7 @@ async def back_button(client, cb: CallbackQuery):
     await show_upload_panel(cb.message, uid, is_edit=True)
 
 # ==============================================================================
-# 9. ADD EPISODE (EDIT) & REPOST SYSTEM
+# 10. ADD EPISODE (EDIT) & REPOST SYSTEM
 # ==============================================================================
 
 @bot.on_message(filters.command("addep") & filters.private)
@@ -1095,10 +1142,10 @@ async def repost_handler(client, cb: CallbackQuery):
         del user_conversations[uid]
 
 # ==============================================================================
-# 10. MAIN MESSAGE HANDLER (TEXT & FILES)
+# 11. MAIN MESSAGE HANDLER (TEXT & FILES)
 # ==============================================================================
 
-@bot.on_message(filters.private & (filters.text | filters.video | filters.document | filters.photo) & ~filters.command(["start", "post", "manual", "addep", "cancel", "trending", "settings", "backup", "setwatermark", "setapi", "settimer", "addchannel", "delchannel", "mychannels", "settutorial"]))
+@bot.on_message(filters.private & (filters.text | filters.video | filters.document | filters.photo) & ~filters.command(["start", "post", "manual", "addep", "cancel", "trending", "settings", "backup", "setwatermark", "setapi", "settimer", "addchannel", "delchannel", "mychannels", "settutorial", "stats", "broadcast", "addpremium", "rempremium"]))
 async def main_conversation_handler(client, message: Message):
     uid = message.from_user.id
     convo = user_conversations.get(uid)
@@ -1405,7 +1452,7 @@ async def main_conversation_handler(client, message: Message):
             await status_msg.edit_text(f"❌ **Error:** {str(e)}")
 
 # ==============================================================================
-# 11. FINAL POST PROCESSING
+# 12. FINAL POST PROCESSING
 # ==============================================================================
 
 @bot.on_callback_query(filters.regex("^proc_final"))
