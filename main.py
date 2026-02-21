@@ -9,6 +9,12 @@
 # 3. BATCH UPLOAD WITH OPTIONAL SEASON TAG.
 # 4. BLOGGER/WEBSITE REDIRECT SUPPORT (Anti-Ban Link System).
 # 5. ADD EPISODE TO OLD POST & REPOST SYSTEM.
+# 6. [NEW] GLOBAL CANCEL COMMAND (/cancel).
+# 7. [NEW] AUTO YOUTUBE TRAILER FETCH.
+# 8. [NEW] TRENDING MOVIES COMMAND (/trending).
+# 9. [NEW] SETTINGS DASHBOARD (/settings).
+# 10. [NEW] DATABASE BACKUP (/backup) FOR OWNER.
+# 11. [NEW] ASYNC ANTI-LAG IMAGE PROCESSING.
 # ==============================================================================
 
 import os
@@ -19,6 +25,7 @@ import logging
 import secrets
 import string
 import time
+import json
 from threading import Thread
 from datetime import datetime
 
@@ -51,7 +58,7 @@ TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 FORCE_SUB_CHANNEL = os.getenv("FORCE_SUB_CHANNEL")
 INVITE_LINK = os.getenv("INVITE_LINK")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID")) 
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0")) 
 
 # ------------------------------------------------------------------------------
 # 🌐 BLOGGER / WEBSITE REDIRECT CONFIGURATION (MIDDLEMAN SYSTEM)
@@ -261,7 +268,7 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
         draw = ImageDraw.Draw(img)
 
         # ---- Badge Logic ----
-        if badge_text:
+        if badge_text and badge_text.strip().lower() != "none":
             badge_font_size = int(img.width / 9)
             font_path = download_font()
             try:
@@ -360,6 +367,28 @@ def watermark_poster(poster_input, watermark_text: str, badge_text: str = None):
 
 # --- TMDB & IMDb Functions ---
 
+def get_tmdb_trailer(media_type, media_id):
+    url = f"https://api.themoviedb.org/3/{media_type}/{media_id}/videos?api_key={TMDB_API_KEY}"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        for vid in data.get("results", []):
+            if vid.get("site") == "YouTube" and vid.get("type") == "Trailer":
+                return f"https://www.youtube.com/watch?v={vid.get('key')}"
+    except Exception:
+        pass
+    return None
+
+def get_trending_today():
+    url = f"https://api.themoviedb.org/3/trending/all/day?api_key={TMDB_API_KEY}"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        return r.json().get("results", [])[:10]
+    except Exception:
+        return []
+
 def search_tmdb(query: str):
     url = f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={query}&include_adult=true&page=1"
     try:
@@ -393,7 +422,9 @@ def get_tmdb_details(media_type, media_id):
     try:
         r = requests.get(url, timeout=10)
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        data['media_type'] = media_type # ensure media_type is preserved
+        return data
     except Exception:
         return None
 
@@ -413,7 +444,7 @@ def extract_id_from_url(url: str):
 # ==============================================================================
 # CAPTION GENERATOR (POST)
 # ==============================================================================
-async def generate_channel_caption(data: dict, language: str, short_links: dict, is_manual: bool = False):
+async def generate_channel_caption(data: dict, language: str, short_links: dict, is_manual: bool = False, trailer_url: str = None):
     title = data.get("title") or data.get("name") or "Movie"
     date = data.get("release_date") or data.get("first_air_date") or "----"
     year = date[:4]
@@ -432,10 +463,12 @@ async def generate_channel_caption(data: dict, language: str, short_links: dict,
 ━━━━━━━━━━━━━━━━━━━━━━━
 ⭐ **Rating:** {rating}/10
 🎭 **Genre:** {genre_str}
-🔊 **Language:** {language}
-━━━━━━━━━━━━━━━━━━━━━━━"""
+🔊 **Language:** {language}"""
 
-    caption += """
+    if trailer_url:
+        caption += f"\n🎞 **Trailer:** [Watch Here]({trailer_url})"
+
+    caption += """\n━━━━━━━━━━━━━━━━━━━━━━━
 👀 𝗪𝗔𝗧𝗖𝗛 𝗢𝗡𝗟𝗜𝗡𝗘/📤𝗗𝗢𝗪𝗡𝗟𝗢𝗔𝗗
 👇  ℍ𝕚𝕘𝕙 𝕊𝕡𝕖𝕖𝕕 | ℕ𝕠 𝔹𝕦𝕗𝕗𝕖𝕣𝕚𝕟𝕘  👇"""
 
@@ -452,6 +485,64 @@ https://t.me/+GL_XAS4MsJg4ODM1"""
 # 5. BOT COMMAND HANDLERS
 # ==============================================================================
 
+@bot.on_message(filters.command("cancel") & filters.private)
+async def cancel_process_cmd(client, message: Message):
+    uid = message.from_user.id
+    if uid in user_conversations:
+        del user_conversations[uid]
+        await message.reply_text("✅ **All processes have been cancelled successfully.**")
+    else:
+        await message.reply_text("ℹ️ **No active process found to cancel.**")
+
+@bot.on_message(filters.command("settings") & filters.private)
+@force_subscribe
+async def settings_dashboard(client, message: Message):
+    uid = message.from_user.id
+    user_data = await users_collection.find_one({'_id': uid})
+    if not user_data:
+        return await message.reply_text("❌ User data not found. Type /start first.")
+
+    watermark = user_data.get('watermark_text', 'Not Set')
+    api_url = user_data.get('shortener_url', 'Not Set')
+    timer = user_data.get('delete_timer', 0)
+    channels = user_data.get('channel_ids', [])
+    channel_list = ", ".join(channels) if channels else "None"
+
+    text = (f"⚙️ **Your Settings Dashboard** ⚙️\n\n"
+            f"💧 **Watermark:** `{watermark}`\n"
+            f"🔗 **Shortener Base:** `{api_url}`\n"
+            f"⏳ **Auto-Delete Timer:** `{int(timer/60)} Mins`\n"
+            f"📢 **Saved Channels:** `{channel_list}`\n\n"
+            f"💡 **How to change:**\n"
+            f"• `/setwatermark Text`\n"
+            f"• `/setapi Key`\n"
+            f"• `/settimer 10` (in mins)\n"
+            f"• `/addchannel -100xxx`")
+    
+    await message.reply_text(text)
+
+@bot.on_message(filters.command("backup") & filters.private)
+async def backup_db_cmd(client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    msg = await message.reply_text("🔄 **Generating Database Backup...**")
+    try:
+        users = await users_collection.find({}).to_list(None)
+        files = await files_collection.find({}).to_list(None)
+        
+        backup_data = {"users": users, "files": files}
+        
+        # Save to JSON
+        with open("db_backup.json", "w", encoding="utf-8") as f:
+            json.dump(backup_data, f, default=str, indent=4)
+            
+        await message.reply_document("db_backup.json", caption="📦 **Database Backup Successfully Generated.**")
+        os.remove("db_backup.json")
+        await msg.delete()
+    except Exception as e:
+        await msg.edit_text(f"❌ **Backup Failed:** {str(e)}")
+
+
 @bot.on_message(filters.command("start") & filters.private)
 @force_subscribe
 async def start_cmd(client, message: Message):
@@ -467,7 +558,6 @@ async def start_cmd(client, message: Message):
         if file_data:
             msg = await message.reply_text("📂 **Fetching your file...**")
             log_msg_id = file_data.get("log_msg_id")
-            # Uses the rich caption saved in DB
             caption = file_data.get("caption", "🎬 **Movie File**")
             timer = file_data.get("delete_timer", 0)
 
@@ -521,7 +611,7 @@ async def start_cmd(client, message: Message):
         ])
     else:
         status_text = "💎 **Premium User**" if is_premium else "👤 **Free User**"
-        welcome_text = f"👋 **Hello {user.first_name}!**\n\nYour Status: {status_text}\n\n👇 **Available Commands:**\n`/post <Name/Link>` - Auto Post (Supports IMDb/TMDB)\n`/manual` - Manual Post (Free for All)\n`/addep <Link>` - Add Episode to Old Post"
+        welcome_text = f"👋 **Hello {user.first_name}!**\n\nYour Status: {status_text}\n\n👇 **Available Commands:**\n`/post <Name/Link>` - Auto Post (Supports IMDb/TMDB)\n`/manual` - Manual Post (Free for All)\n`/addep <Link>` - Add Episode to Old Post\n`/trending` - Get Trending Movies/Series"
         
         user_buttons = [
             [InlineKeyboardButton("👤 My Account", callback_data="my_account")],
@@ -539,7 +629,7 @@ async def start_cmd(client, message: Message):
 @bot.on_callback_query(filters.regex(r"^(admin_|my_account|api_help|request_movie)"))
 async def callback_handler(client, cb: CallbackQuery):
     data = cb.data
-    uid = cb.from_user.id
+    uid = cb.fromuser.id if hasattr(cb, 'from_user') else cb.from_user.id
     
     if data == "my_account":
         status = "Premium 💎" if await is_user_premium(uid) else "Free 👤"
@@ -562,15 +652,15 @@ async def callback_handler(client, cb: CallbackQuery):
             await cb.answer(f"📊 Total Users: {total}\n💎 Premium: {prem}\n📂 Files: {files}\n📨 Requests: {reqs}", show_alert=True)
             
         elif data == "admin_broadcast":
-            await cb.message.edit_text("📢 **Broadcast Mode**\n\nSend message to broadcast.")
+            await cb.message.edit_text("📢 **Broadcast Mode**\n\nSend message to broadcast.\n(Type /cancel to stop)")
             user_conversations[uid] = {"state": "admin_broadcast_wait"}
             
         elif "add_premium" in data:
-            await cb.message.edit_text("➕ **Add Premium**\n\nSend User ID.")
+            await cb.message.edit_text("➕ **Add Premium**\n\nSend User ID.\n(Type /cancel to stop)")
             user_conversations[uid] = {"state": "admin_add_prem_wait"}
             
         elif "rem_premium" in data:
-            await cb.message.edit_text("➖ **Remove Premium**\n\nSend User ID.")
+            await cb.message.edit_text("➖ **Remove Premium**\n\nSend User ID.\n(Type /cancel to stop)")
             user_conversations[uid] = {"state": "admin_rem_prem_wait"}
 
 @bot.on_callback_query(filters.regex("^cancel_req"))
@@ -590,6 +680,7 @@ async def settings_commands(client, message: Message):
     
     if cmd == "setwatermark":
         text = " ".join(message.command[1:])
+        if text.lower() in ['none', 'off', 'clear']: text = ""
         await users_collection.update_one({'_id': uid}, {'$set': {'watermark_text': text}}, upsert=True)
         await message.reply_text(f"✅ Watermark set: `{text}`")
 
@@ -636,8 +727,27 @@ async def settings_commands(client, message: Message):
         else: await message.reply_text("❌ No channels saved.")
 
 # ==============================================================================
-# 6. AUTO POST (TMDB & IMDb SMART SEARCH)
+# 6. AUTO POST (TMDB & IMDb SMART SEARCH) & TRENDING
 # ==============================================================================
+
+@bot.on_message(filters.command("trending") & filters.private)
+@force_subscribe
+@check_premium
+async def trending_cmd(client, message: Message):
+    msg = await message.reply_text("🔥 **Fetching Today's Trending Movies/Series...**")
+    results = await asyncio.to_thread(get_trending_today)
+    
+    if not results:
+        return await msg.edit_text("❌ **Could not fetch trending data right now.**")
+        
+    buttons = []
+    for r in results:
+        m_type = r.get('media_type', 'movie')
+        title = r.get('title') or r.get('name')
+        year = (r.get('release_date') or r.get('first_air_date') or '----')[:4]
+        buttons.append([InlineKeyboardButton(f"🎬 {title} ({year})", callback_data=f"sel_{m_type}_{r['id']}")])
+        
+    await msg.edit_text(f"📈 **Top 10 Trending Today:**", reply_markup=InlineKeyboardMarkup(buttons))
 
 @bot.on_message(filters.command("post") & filters.private)
 @force_subscribe
@@ -649,16 +759,13 @@ async def post_search_cmd(client, message: Message):
     raw_query = " ".join(message.command[1:]).strip()
     msg = await message.reply_text(f"🔍 **Searching...**")
     
-    # Analyze Input (Link or Text)
     search_type, m_type, extracted_val = extract_id_from_url(raw_query)
     
     results = []
     
-    # 1. Direct TMDB Link
     if search_type == "tmdb":
-        details = get_tmdb_details(m_type, extracted_val)
+        details = await asyncio.to_thread(get_tmdb_details, m_type, extracted_val)
         if details:
-            # Skip selection, go straight to language
             uid = message.from_user.id
             user_conversations[uid] = {
                 "details": details,
@@ -674,17 +781,14 @@ async def post_search_cmd(client, message: Message):
         else:
             return await msg.edit_text("❌ Invalid TMDB Link.")
 
-    # 2. IMDb Link or ID
     elif search_type == "imdb":
-        results = search_by_imdb(extracted_val)
+        results = await asyncio.to_thread(search_by_imdb, extracted_val)
         if not results:
              return await msg.edit_text("❌ IMDb ID not found in TMDB database.")
     
-    # 3. Regular Text Search
     else:
-        results = search_tmdb(extracted_val)
+        results = await asyncio.to_thread(search_tmdb, extracted_val)
 
-    # Process Results
     if not results:
         return await msg.edit_text("❌ **No results found!**\nTry checking the spelling or use an IMDb link.")
     
@@ -704,7 +808,6 @@ async def post_search_cmd(client, message: Message):
 @bot.on_message(filters.command("manual") & filters.private)
 @force_subscribe
 async def manual_cmd_start(client, message: Message):
-    """Dedicated Manual Post Entry Point."""
     await message.reply_text(
         "📝 **Manual Post Creation**\n\nWhat are you uploading?",
         reply_markup=InlineKeyboardMarkup([
@@ -733,7 +836,7 @@ async def manual_type_handler(client, cb: CallbackQuery):
 @bot.on_callback_query(filters.regex("^sel_"))
 async def media_selected(client, cb: CallbackQuery):
     _, m_type, mid = cb.data.split("_")
-    details = get_tmdb_details(m_type, mid)
+    details = await asyncio.to_thread(get_tmdb_details, m_type, mid)
     if not details: return await cb.answer("Error fetching details!", show_alert=True)
     
     uid = cb.from_user.id
@@ -764,12 +867,10 @@ async def language_selected(client, cb: CallbackQuery):
     await show_upload_panel(cb.message, uid, is_edit=True)
 
 async def show_upload_panel(message, uid, is_edit=False):
-    """Shows the panel to upload files."""
     convo = user_conversations.get(uid, {})
     is_batch = convo.get("is_batch_mode", False)
     season_tag = convo.get("batch_season_prefix", None)
     
-    # [UPDATED] Batch Mode Indicator in Button
     if is_batch:
         if season_tag:
             batch_text = f"🟢 Batch ON ({season_tag})"
@@ -812,22 +913,18 @@ async def show_upload_panel(message, uid, is_edit=False):
     else:
         await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
 
-# --- [UPDATED] BATCH TOGGLE WITH OPTIONAL SEASON INPUT ---
-
 @bot.on_callback_query(filters.regex("^toggle_batch"))
 async def toggle_batch_handler(client, cb: CallbackQuery):
     uid = cb.from_user.id
     convo = user_conversations.get(uid)
     if not convo: return await cb.answer("Session expired.", show_alert=True)
     
-    # If already active, turn it off
     if convo.get("is_batch_mode", False):
         convo["is_batch_mode"] = False
-        convo["batch_season_prefix"] = None # Reset prefix
+        convo["batch_season_prefix"] = None 
         await cb.answer("🔴 Batch Mode Disabled.", show_alert=True)
         await show_upload_panel(cb.message, uid, is_edit=True)
     else:
-        # Ask for Season Number (Optional)
         convo["state"] = "wait_batch_season_input"
         await cb.message.edit_text(
             "📝 **Enter Season Number (Optional)**\n\n"
@@ -845,7 +942,7 @@ async def batch_skip_season_handler(client, cb: CallbackQuery):
     uid = cb.from_user.id
     convo = user_conversations.get(uid)
     
-    convo["batch_season_prefix"] = None # No prefix
+    convo["batch_season_prefix"] = None 
     convo["is_batch_mode"] = True
     convo["episode_count"] = 1
     convo["current_quality"] = "batch" 
@@ -883,19 +980,18 @@ async def upload_request(client, cb: CallbackQuery):
 async def badge_menu_handler(client, cb: CallbackQuery):
     uid = cb.from_user.id
     user_conversations[uid]["state"] = "wait_badge_text"
-    await cb.message.edit_text("✍️ **Enter the text for the Badge:**\n(e.g., 4K HDR, Dual Audio)")
+    await cb.message.edit_text("✍️ **Enter the text for the Badge:**\n(e.g., 4K HDR, Dual Audio) or 'None'")
 
 @bot.on_callback_query(filters.regex("^back_panel"))
 async def back_button(client, cb: CallbackQuery):
     uid = cb.from_user.id
     if uid in user_conversations:
-        # Turn off batch mode when going back
         user_conversations[uid]["is_batch_mode"] = False
         user_conversations[uid]["batch_season_prefix"] = None
     await show_upload_panel(cb.message, uid, is_edit=True)
 
 # ==============================================================================
-# 9. ADD EPISODE (EDIT) & REPOST SYSTEM [NEW FEATURE]
+# 9. ADD EPISODE (EDIT) & REPOST SYSTEM
 # ==============================================================================
 
 @bot.on_message(filters.command("addep") & filters.private)
@@ -910,20 +1006,18 @@ async def add_episode_cmd(client, message: Message):
     
     post_link = message.command[1]
     
-    # Link Parsing Logic
     try:
-        if "/c/" in post_link: # Private Channel Link
+        if "/c/" in post_link: 
             parts = post_link.split("/")
             chat_id = int("-100" + parts[-2])
             msg_id = int(parts[-1])
-        else: # Public Channel Link
+        else: 
             parts = post_link.split("/")
-            chat_id = parts[-2] # Username
+            chat_id = parts[-2] 
             msg_id = int(parts[-1])
     except:
         return await message.reply_text("❌ **Invalid Link Format!**")
 
-    # Verify if Bot can access the message
     try:
         target_msg = await client.get_messages(chat_id, msg_id)
         if not target_msg or not target_msg.reply_markup:
@@ -931,7 +1025,6 @@ async def add_episode_cmd(client, message: Message):
     except Exception as e:
         return await message.reply_text(f"❌ **Error accessing post:** {e}\n(Make sure Bot is Admin)")
 
-    # Save State
     uid = message.from_user.id
     user_conversations[uid] = {
         "state": "wait_file_for_edit",
@@ -945,8 +1038,6 @@ async def add_episode_cmd(client, message: Message):
         "📂 **Now send the New File (Episode/Movie):**\n"
         "_(Bot will create a link and add it to the post)_"
     )
-
-# --- Repost Callback Handlers ---
 
 @bot.on_callback_query(filters.regex("^repost_"))
 async def repost_handler(client, cb: CallbackQuery):
@@ -964,20 +1055,16 @@ async def repost_handler(client, cb: CallbackQuery):
     
     try:
         if action == "repost_full":
-            # 1. আগে আপডেট হওয়া মেসেজটি (বাটনসহ) নিয়ে আসা
             updated_msg = await client.get_messages(chat_id, msg_id)
-            
-            # 2. মেসেজটি কপি করা (বাটনগুলো স্পষ্টভাবে উল্লেখ করে)
             await client.copy_message(
                 chat_id=chat_id,
                 from_chat_id=chat_id,
                 message_id=msg_id,
-                reply_markup=updated_msg.reply_markup  # <--- এই লাইনটি বাটন কপি করা নিশ্চিত করে
+                reply_markup=updated_msg.reply_markup 
             )
             await cb.message.edit_text(f"✅ **Fresh Post Sent!**\nUsers have been notified about **{update_text}**.")
             
         elif action == "repost_alert":
-            # Option 2: Send a small notification linking to the main post
             if str(chat_id).startswith("-100"):
                 clean_id = str(chat_id)[4:]
                 post_link = f"https://t.me/c/{clean_id}/{msg_id}"
@@ -1004,14 +1091,14 @@ async def repost_handler(client, cb: CallbackQuery):
         logger.error(f"Repost Error: {e}")
         await cb.message.edit_text(f"❌ **Failed to Repost:** {e}")
     
-    # Clean up
     if uid in user_conversations:
         del user_conversations[uid]
+
 # ==============================================================================
-# 10. MAIN MESSAGE HANDLER (TEXT & FILES) - INCLUDES EDIT LOGIC
+# 10. MAIN MESSAGE HANDLER (TEXT & FILES)
 # ==============================================================================
 
-@bot.on_message(filters.private & (filters.text | filters.video | filters.document | filters.photo))
+@bot.on_message(filters.private & (filters.text | filters.video | filters.document | filters.photo) & ~filters.command(["start", "post", "manual", "addep", "cancel", "trending", "settings", "backup", "setwatermark", "setapi", "settimer", "addchannel", "delchannel", "mychannels", "settutorial"]))
 async def main_conversation_handler(client, message: Message):
     uid = message.from_user.id
     convo = user_conversations.get(uid)
@@ -1022,7 +1109,6 @@ async def main_conversation_handler(client, message: Message):
     state = convo["state"]
     text = message.text
     
-    # --- REQUEST SYSTEM LOGIC ---
     if state == "waiting_for_request":
         request_text = text
         if not request_text: return await message.reply_text("❌ Please send text only.")
@@ -1045,7 +1131,6 @@ async def main_conversation_handler(client, message: Message):
         del user_conversations[uid]
         return
 
-    # --- ADMIN LOGIC ---
     if state == "admin_broadcast_wait":
         if uid != OWNER_ID: return
         msg = await message.reply_text("📣 **Broadcasting...**")
@@ -1074,7 +1159,6 @@ async def main_conversation_handler(client, message: Message):
         del user_conversations[uid]
         return
 
-    # --- [UPDATED] BATCH SEASON INPUT ---
     if state == "wait_batch_season_input":
         prefix = text.strip()
         convo["batch_season_prefix"] = prefix
@@ -1091,7 +1175,6 @@ async def main_conversation_handler(client, message: Message):
         )
         return
 
-    # --- MANUAL MODE INPUTS ---
     if state == "wait_manual_title":
         convo["details"]["title"] = text
         convo["details"]["name"] = text
@@ -1150,7 +1233,6 @@ async def main_conversation_handler(client, message: Message):
         convo["state"] = "wait_file_upload"
         await message.reply_text(f"📤 **Upload File for: '{text}'**\n👉 Send Video/File now.")
 
-    # --- [NEW] EDIT POST FILE UPLOAD ---
     elif state == "wait_file_for_edit":
         if not (message.video or message.document):
             return await message.reply_text("❌ Please send a **Video** or **Document** file.")
@@ -1159,10 +1241,9 @@ async def main_conversation_handler(client, message: Message):
             "📝 **File Received!**\n\n👉 **Enter Button Name:**\n(e.g. `Episode 2`, `1080p Link`)"
         )
         convo["state"] = "wait_btn_name_for_edit"
-        convo["pending_file_msg"] = message # Store file message temporarily
+        convo["pending_file_msg"] = message 
         return
 
-    # --- [NEW] EDIT POST FINAL STEP ---
     elif state == "wait_btn_name_for_edit":
         button_name = text
         chat_id = convo["edit_chat_id"]
@@ -1173,11 +1254,9 @@ async def main_conversation_handler(client, message: Message):
         status_msg = await message.reply_text("🔄 **Processing & Updating Channel Post...**")
         
         try:
-            # 1. Forward to Log
             log_msg = await file_msg.copy(chat_id=LOG_CHANNEL_ID, caption=f"#UPDATE_POST\nUser: {uid}\nItem: {button_name}")
             backup_file_id = log_msg.video.file_id if log_msg.video else log_msg.document.file_id
             
-            # 2. DB Save
             code = generate_random_code()
             user_data = await users_collection.find_one({'_id': uid})
             file_caption = f"🎬 **{button_name}**\n━━━━━━━━━━━━━━\n🤖 @{await get_bot_username()}"
@@ -1188,7 +1267,6 @@ async def main_conversation_handler(client, message: Message):
                 "uploader_id": uid, "created_at": datetime.now()
             })
             
-            # 3. Link Gen
             bot_uname = await get_bot_username()
             if BLOG_URL and "http" in BLOG_URL:
                 base_blog = BLOG_URL.rstrip("/")
@@ -1198,24 +1276,20 @@ async def main_conversation_handler(client, message: Message):
             
             short_link = await shorten_link(uid, final_long_url)
             
-            # 4. Update Keyboard
             new_button = InlineKeyboardButton(button_name, url=short_link)
             current_keyboard = old_markup.inline_keyboard if old_markup else []
             
-            # Add logic (Row limit 3 for episodes)
             if current_keyboard and len(current_keyboard[-1]) < 3 and "Episode" in button_name:
                 current_keyboard[-1].append(new_button)
             else:
                 current_keyboard.append([new_button])
                 
-            # 5. Edit Message
             await client.edit_message_reply_markup(
                 chat_id=chat_id,
                 message_id=msg_id,
                 reply_markup=InlineKeyboardMarkup(current_keyboard)
             )
             
-            # 6. ASK REPOST
             convo["repost_data"] = {
                 "chat_id": chat_id,
                 "message_id": msg_id,
@@ -1239,12 +1313,10 @@ async def main_conversation_handler(client, message: Message):
             await status_msg.edit_text(f"❌ **Error:** {str(e)}")
         return
 
-    # --- [UPDATED] FILE UPLOAD LOGIC (BATCH WITH SEASON SUPPORT & BLOGGER REDIRECT) ---
     elif state == "wait_file_upload":
         if not (message.video or message.document):
             return await message.reply_text("❌ Please send a **Video** or **Document** file.")
         
-        # Determine Button Name
         is_batch = convo.get("is_batch_mode", False)
         
         if is_batch:
@@ -1252,9 +1324,9 @@ async def main_conversation_handler(client, message: Message):
             season_prefix = convo.get("batch_season_prefix", None)
             
             if season_prefix:
-                btn_name = f"{season_prefix} E{count}" # e.g., S1 E1
+                btn_name = f"{season_prefix} E{count}" 
             else:
-                btn_name = f"Episode {count}" # Default
+                btn_name = f"Episode {count}" 
         
         elif convo["current_quality"] == "custom": 
             btn_name = convo["temp_btn_name"]
@@ -1264,22 +1336,17 @@ async def main_conversation_handler(client, message: Message):
         status_msg = await message.reply_text(f"🔄 **Processing '{btn_name}'...**")
         
         try:
-            # 1. Forward to Log Channel
             log_msg = await message.copy(chat_id=LOG_CHANNEL_ID, caption=f"#BACKUP\nUser: {uid}\nItem: {btn_name}")
             backup_file_id = log_msg.video.file_id if log_msg.video else log_msg.document.file_id
             
-            # 2. Generate RICH CAPTION for the file
             details = convo['details']
             title = details.get('title') or details.get('name') or "Unknown"
             
-            # Year extraction
             date = details.get("release_date") or details.get("first_air_date") or "----"
             year = date[:4]
             
-            # Language
             lang = convo.get("language", "Unknown")
             
-            # Genre Formatting
             if isinstance(details.get("genres"), list) and len(details["genres"]) > 0:
                 if isinstance(details["genres"][0], dict):
                     genre_str = ", ".join([g["name"] for g in details.get("genres", [])[:3]])
@@ -1288,7 +1355,6 @@ async def main_conversation_handler(client, message: Message):
             else:
                 genre_str = "N/A"
 
-            # Rich Caption Template
             file_caption = (
                 f"🎬 **{title} ({year})**\n"
                 f"🔰 **Quality:** {btn_name}\n"
@@ -1298,7 +1364,6 @@ async def main_conversation_handler(client, message: Message):
                 f"🤖 @{await get_bot_username()}"
             )
             
-            # 3. Save to Database with new caption
             code = generate_random_code()
             user_data = await users_collection.find_one({'_id': uid})
             
@@ -1312,16 +1377,12 @@ async def main_conversation_handler(client, message: Message):
                 "created_at": datetime.now()
             })
             
-            # 4. Generate Link (BRIDGE SYSTEM: BLOGGER vs DIRECT)
             bot_uname = await get_bot_username()
             
             if BLOG_URL and "http" in BLOG_URL:
-                # If Blogger/Site URL is set, use it (Safe Method)
-                # Removes trailing slash if user added it
                 base_blog = BLOG_URL.rstrip("/")
                 final_long_url = f"{base_blog}/?code={code}"
             else:
-                # Fallback to direct telegram link (Risky if bot banned)
                 final_long_url = f"https://t.me/{bot_uname}?start={code}"
             
             short_link = await shorten_link(uid, final_long_url)
@@ -1330,7 +1391,6 @@ async def main_conversation_handler(client, message: Message):
             
             await message.delete()
             
-            # [UPDATED] BATCH LOGIC
             if is_batch:
                 convo["episode_count"] += 1
                 await status_msg.edit_text(
@@ -1356,48 +1416,45 @@ async def process_final_post(client, cb: CallbackQuery):
     if not convo: return await cb.answer("Session expired.", show_alert=True)
     if not convo['links']: return await cb.answer("❌ No files uploaded!", show_alert=True)
         
-    await cb.message.edit_text("🖼️ **Generating Post...**")
+    await cb.message.edit_text("🖼️ **Generating Post... Please wait...**")
     
-    # 1. Caption
+    details = convo['details']
+    m_type = details.get('media_type', 'movie')
+    m_id = details.get('id')
+    
+    # Auto fetch Trailer URL using Async Thread
+    trailer_url = None
+    if m_id and not convo.get('is_manual'):
+        trailer_url = await asyncio.to_thread(get_tmdb_trailer, m_type, m_id)
+    
     caption = await generate_channel_caption(
-        convo['details'], convo.get('language', 'Unknown'), convo['links'], is_manual=convo.get("is_manual", False)
+        convo['details'], convo.get('language', 'Unknown'), convo['links'], 
+        is_manual=convo.get("is_manual", False), trailer_url=trailer_url
     )
     
-    # 2. Buttons
     buttons = []
-    # Smart Sorting: standard qualities first, then Episodes
     priority = ["480p", "720p", "1080p"]
     
     def sort_key(k):
-        # 1. Standard qualities first
         if k in priority: return priority.index(k)
-        
-        # 2. Episodes with "E" + Numbers (e.g., S1 E1, Episode 5)
-        # We look for the LAST number in the string which is usually the Episode number
         nums = re.findall(r'\d+', k)
         if nums:
-            # If "S1 E1", nums=['1', '1']. We want the last '1' (Episode) for sorting.
-            # If "Episode 10", nums=['10'].
             try: return 100 + int(nums[-1])
             except: return 200
         return 300
 
     sorted_keys = sorted(convo['links'].keys(), key=sort_key)
 
-    # Button Layout Logic
     temp_row = []
     for qual in sorted_keys:
         link = convo['links'][qual]
-        
-        # Label Formatting
         btn_text = qual
+        
         if qual in priority:
             btn_text = f"📥 Download {qual}"
         elif "Episode" in qual:
-            # Shorten "Episode 1" to "Ep 1"
             btn_text = qual.replace("Episode", "Ep")
         
-        # Logic: Standard buttons in single rows, Episodes in Grid (3 per row)
         if qual in priority:
             if temp_row:
                 buttons.append(temp_row)
@@ -1405,7 +1462,7 @@ async def process_final_post(client, cb: CallbackQuery):
             buttons.append([InlineKeyboardButton(btn_text, url=link)])
         else:
             temp_row.append(InlineKeyboardButton(btn_text, url=link))
-            if len(temp_row) == 3: # 3 Episodes per row
+            if len(temp_row) == 3: 
                 buttons.append(temp_row)
                 temp_row = []
     
@@ -1415,19 +1472,19 @@ async def process_final_post(client, cb: CallbackQuery):
     if user_data.get('tutorial_url'):
         buttons.append([InlineKeyboardButton("ℹ️ How to Download", url=user_data['tutorial_url'])])
     
-    # 3. Poster Processing
-    details = convo['details']
     poster_input = None
     if details.get('poster_local_path') and os.path.exists(details['poster_local_path']):
         poster_input = details['poster_local_path']
     elif details.get('poster_path'):
         poster_input = f"https://image.tmdb.org/t/p/w500{details['poster_path']}"
         
-    poster_buffer, error = watermark_poster(poster_input, user_data.get('watermark_text'), convo.get('temp_badge_text'))
+    # Process Image with Asyncio to prevent lag
+    poster_buffer, error = await asyncio.to_thread(
+        watermark_poster, poster_input, user_data.get('watermark_text'), convo.get('temp_badge_text')
+    )
     
     if not poster_buffer: return await cb.message.edit_text(f"❌ Image Error: {error}")
     
-    # 4. Send Preview
     poster_buffer.seek(0)
     try:
         preview_msg = await client.send_photo(
@@ -1438,12 +1495,10 @@ async def process_final_post(client, cb: CallbackQuery):
 
     await cb.message.delete()
     
-    # 5. Store for Channel Post
     convo['final_post_data'] = {
         'file_id': preview_msg.photo.file_id, 'caption': caption, 'buttons': buttons
     }
     
-    # 6. Channel Selection
     channels = user_data.get('channel_ids', [])
     channel_btns = []
     
